@@ -1,0 +1,21 @@
+[general]
+name=Align Edge
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=ArcGIS Pro-style Align Edge: hover a topology edge to preview it (solid) and the adjacent edge it will snap to (dashed), then click to make them coincident.
+about=Adds an Align Edge tool to the Advanced Digitizing toolbar. It builds a map topology (edges and nodes) from every visible line and polygon layer in edit mode, highlights the edge under the cursor and the adjacent edge that shares both of its end nodes, shades the area between them, and shows a tooltip listing which features will change, which they will align to, the area closed and the maximum shift. A single click reshapes the hovered edge in every feature that shares it. Tab cycles between candidate targets; Esc clears. Results are validated and written with undo support.
+version=1.3.1
+author=Charles
+email=pwizzle77@gmail.com
+category=Vector
+tags=topology,align,edge,digitizing,editing,arcgis,snapping,gap,sliver
+experimental=False
+deprecated=False
+icon=icons/align_edge.svg
+hasProcessingProvider=no
+changelog=1.3.1 - A redraw that never finishes no longer keeps rebuilding topology on the main thread. While the tool is on, the map draws one layer at a time and preview redraws are paused. A redraw still busy after 2 s is cancelled and painted once; layer data is not read on that turn.
+ 1.3.0 - Features are cached and kept current from the layers' edit signals, so aligning, undo, panning and tooltips no longer read the data source. Data is only read while the map is not drawing, with no time limit (v1.2.0 could freeze by reading behind a map render that never finished).
+ 1.2.0 - No worker threads: topology builds in short slices on the main thread (fixes the map getting stuck "drawing" with layers missing after several aligns). Waiting for the map is capped at 2 s. Target selection: nearest edges are offered by enclosed area instead of the strict 0.5 length ratio, so fat gaps such as triangles are offered from both sides. Diagnostic log align_edge_debug.log (can be turned off in settings).
+ 1.1.0 - Fix QGIS freezing: topology is built in a background task; layer data is only read when the map is not drawing (busy cursor while waiting); feature iterators are always closed; hover distance calculation is indexed (long edges went from ~18 s to ~0.2 s); faster noding with no large memory use; tooltip no longer forces canvas repaints.
+ 1.0.0 - First release.

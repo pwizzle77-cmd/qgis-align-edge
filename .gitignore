@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.pyo
+align_edge_debug.log
+align_edge_debug.log.old
+*.bak
+~$*
