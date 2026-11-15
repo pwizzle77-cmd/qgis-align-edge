@@ -35,6 +35,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
+from . import diag
 from .compat import GEOM_POLYGON, geometry_type, is_line_or_polygon, reverse_transform
 from .topology_core import TopologyGraph
 
@@ -197,7 +198,7 @@ class FeatureCache(object):
         if self._dest is None or dest != self._dest:
             self.clear()
             self._dest = dest
-        want = {l.id(): l for l in participating_layers(self.canvas, self.settings)}
+        want = {layer.id(): layer for layer in participating_layers(self.canvas, self.settings)}
         for lid in list(self.layers):
             if lid not in want:
                 self._disconnect(self.layers.pop(lid))
@@ -284,8 +285,8 @@ class FeatureCache(object):
         if e is not None and e.feature is not None:
             try:
                 e.feature.setAttribute(idx, val)
-            except Exception:
-                pass
+            except Exception as err:
+                diag.log_once(("attr", lc.lid), "cache: attribute update failed on layer {}: {!r}".format(lc.lid, err))
 
     def _invalidate(self, lc, why):
         if not lc.dirty:
@@ -301,8 +302,8 @@ class FeatureCache(object):
                 added = buf.addedFeatures()
                 if fid in added:
                     return added[fid]
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log_once(("edit buffer", lc.lid), "cache: edit buffer unavailable on layer {}: {!r}".format(lc.lid, err))
         return None
 
     # ---------------------------------------------------------- reading
@@ -428,8 +429,8 @@ class GraphContext(object):
                 v = exp.evaluate(ctx)
                 if v is not None and str(v) not in ("", "NULL"):
                     text = str(v)
-            except Exception:
-                pass
+            except Exception as err:
+                diag.log_once(("label", lid), "label expression failed on layer {}: {!r}".format(lid, err))
         self._labels[feat_key] = text
         return text
 

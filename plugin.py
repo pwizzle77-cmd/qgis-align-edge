@@ -119,7 +119,7 @@ class AlignEdgePlugin(object):
         self._watched = []
 
     def _layers_removed(self, *args):
-        self._watched = [l for l in self._watched if _alive(l)]
+        self._watched = [layer for layer in self._watched if _alive(layer)]
         self._watch()
         self.update_enabled()
 

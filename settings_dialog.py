@@ -104,7 +104,7 @@ class SettingsDialog(QDialog):
                            "Uncheck a layer to exclude it."))
         self.layers = QListWidget()
         excluded = s.excluded_layer_ids()
-        for lyr in sorted(QgsProject.instance().mapLayers().values(), key=lambda l: l.name().lower()):
+        for lyr in sorted(QgsProject.instance().mapLayers().values(), key=lambda layer: layer.name().lower()):
             if not isinstance(lyr, QgsVectorLayer) or not is_line_or_polygon(lyr):
                 continue
             it = QListWidgetItem(lyr.name())

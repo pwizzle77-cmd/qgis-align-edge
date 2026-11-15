@@ -82,12 +82,14 @@ def snap_index_busy(canvas):
     for layer in layers:
         try:
             locator = utils.locatorForLayer(layer)
-        except Exception:
+        except Exception as err:
+            diag.log_once(("snap", "locator"), "snap locator lookup failed: {!r}".format(err))
             continue
         try:
             if locator is not None and locator.isIndexing():
                 return True
-        except Exception:
+        except Exception as err:
+            diag.log_once(("snap", "indexing"), "snap locator state unavailable: {!r}".format(err))
             continue
     return False
 
@@ -195,8 +197,8 @@ class AlignEdgeTool(QgsMapTool):
             if not self.canvas.isDrawing():
                 self.canvas.stopRendering()
                 self._preview_pause = True
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log("could not cancel preview redraw on start: {!r}".format(err))
         self._start_build_when_idle()
 
     def deactivate(self):
@@ -408,13 +410,13 @@ class AlignEdgeTool(QgsMapTool):
             if frozen:
                 try:
                     canvas.freeze(False)
-                except Exception:
-                    pass
+                except Exception as err:
+                    diag.log("could not unfreeze the map canvas: {!r}".format(err))
                 # freeze() drops a redraw that was requested during the read.
                 try:
                     canvas.refresh()
-                except Exception:
-                    pass
+                except Exception as err:
+                    diag.log("map refresh after reading layers failed: {!r}".format(err))
 
     def _on_wait_tick(self):
         if not self._active:
@@ -454,8 +456,8 @@ class AlignEdgeTool(QgsMapTool):
             elapsed, self._render_recoveries))
         try:
             self.canvas.setParallelRenderingEnabled(False)
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log("could not turn off parallel rendering: {!r}".format(err))
         try:
             self.canvas.stopRendering()
             diag.log("stopped stuck map draw")
@@ -560,8 +562,8 @@ class AlignEdgeTool(QgsMapTool):
             try:
                 canvas.setParallelRenderingEnabled(False)
                 diag.log("parallel rendering off")
-            except Exception:
-                pass
+            except Exception as err:
+                diag.log("could not turn off parallel rendering: {!r}".format(err))
             self._preview_was = None
             if hasattr(canvas, "setPreviewJobsEnabled"):
                 try:
@@ -576,13 +578,13 @@ class AlignEdgeTool(QgsMapTool):
             return
         try:
             canvas.setParallelRenderingEnabled(bool(self._parallel_was))
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log("could not restore parallel rendering: {!r}".format(err))
         if self._preview_was is not None:
             try:
                 canvas.setPreviewJobsEnabled(bool(self._preview_was))
-            except Exception:
-                pass
+            except Exception as err:
+                diag.log("could not restore preview jobs: {!r}".format(err))
         self._jobs_held = False
         diag.log("map draw settings restored")
 

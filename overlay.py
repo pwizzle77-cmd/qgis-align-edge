@@ -7,6 +7,7 @@ from qgis.PyQt.QtCore import QPoint, Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QLabel
 
+from . import diag
 from .compat import GEOM_LINE, GEOM_POINT, GEOM_POLYGON, ev
 from .settings import DISPLAY_ALL
 
@@ -155,7 +156,7 @@ class Overlay(object):
         for b in self._bands:
             try:
                 scene.removeItem(b)
-            except Exception:
-                pass
+            except Exception as err:
+                diag.log("overlay: could not remove a rubber band: {!r}".format(err))
         self._bands = []
         self.tip.deleteLater()

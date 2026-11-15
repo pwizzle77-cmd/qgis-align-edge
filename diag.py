@@ -15,6 +15,7 @@ LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_edge_
 _MAX_BYTES = 1024 * 1024
 _enabled = True
 _fh = None
+_seen = set()
 
 
 def set_enabled(on):
@@ -35,6 +36,7 @@ def _handle():
 
 
 def log(msg):
+    global _enabled
     if not _enabled:
         return
     try:
@@ -42,7 +44,17 @@ def log(msg):
         stamp = time.strftime("%H:%M:%S", time.localtime(now)) + ".%03d" % (int(now * 1000) % 1000)
         _handle().write("{} {}\n".format(stamp, msg))
     except Exception:
-        pass
+        # The log must never break the tool. If the file cannot be written
+        # (read-only folder, disk full, ...), stop logging for this session.
+        _enabled = False
+
+
+def log_once(key, msg):
+    """Log a message only the first time `key` is seen (for repeating paths)."""
+    if key in _seen:
+        return
+    _seen.add(key)
+    log(msg)
 
 
 class watchdog(object):
@@ -69,10 +81,8 @@ class watchdog(object):
 
     def __exit__(self, *exc):
         if self.armed:
-            try:
-                faulthandler.cancel_dump_traceback_later()
-            except Exception:
-                pass
+            # no-op when nothing is scheduled; it has no failure path
+            faulthandler.cancel_dump_traceback_later()
         dt = time.perf_counter() - self.t0
         log("{} took {:.3f} s{}".format(self.what, dt, "" if exc[0] is None
                                           else " (error: {})".format(exc[1])))
@@ -81,13 +91,10 @@ class watchdog(object):
 
 def close():
     global _fh
-    try:
-        faulthandler.cancel_dump_traceback_later()
-    except Exception:
-        pass
-    if _fh is not None:
+    faulthandler.cancel_dump_traceback_later()
+    fh, _fh = _fh, None
+    if fh is not None and not fh.closed:
         try:
-            _fh.close()
-        except Exception:
-            pass
-        _fh = None
+            fh.close()
+        except OSError:
+            return  # the file is already unusable; nothing left to clean up

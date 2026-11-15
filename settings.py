@@ -3,6 +3,7 @@
 
 from qgis.core import Qgis, QgsProject, QgsSettings, QgsTolerance, QgsUnitTypes
 
+from . import diag
 from .compat import UNIT_DEGREES, UNIT_METERS
 
 DISPLAY_ALL = "all"            # Pro "All Elements"
@@ -84,8 +85,8 @@ class Settings(object):
                     cfg.tolerance(), None, canvas.mapSettings(), units)
             if r and r > 0:
                 return max(r, 3 * mupp)
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log_once("search radius", "snapping tolerance unavailable, using 10 px: {!r}".format(err))
         return 10 * mupp
 
     def cluster_tolerance(self, canvas):
@@ -99,6 +100,6 @@ class Settings(object):
             f = QgsUnitTypes.fromUnitToUnitFactor(UNIT_METERS, units)
             if f and f > 0:
                 return 0.001 * f
-        except Exception:
-            pass
+        except Exception as err:
+            diag.log_once("cluster tolerance", "unit conversion failed, using 0.001: {!r}".format(err))
         return 0.001

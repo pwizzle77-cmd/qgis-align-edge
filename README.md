@@ -13,16 +13,16 @@ The button sits on the **Advanced Digitizing** toolbar. The same commands are un
 
 ## Install
 
-1. Download `alignedge-1.3.1.zip` from the [latest release](https://github.com/pwizzle77-cmd/qgis-align-edge/releases/latest).
+1. Download `align_edge-1.3.2.zip` from the [latest release](https://github.com/pwizzle77-cmd/qgis-align-edge/releases/latest).
 2. In QGIS, open **Plugins → Manage and Install Plugins → Install from ZIP**.
 3. Choose the zip and install it.
 4. Turn the plugin on if QGIS does not enable it automatically.
 
-The zip has one folder, `alignedge`, with `metadata.txt` inside it.
+The zip has one folder, `align_edge`, with `metadata.txt` inside it.
 
 To install from a clone instead, copy this folder to your QGIS profile:
 
-`python/plugins/alignedge`
+`python/plugins/align_edge`
 
 Then restart QGIS.
 
