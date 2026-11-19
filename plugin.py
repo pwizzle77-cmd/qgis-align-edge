@@ -24,6 +24,7 @@ class AlignEdgePlugin(object):
         self.settings = Settings()
         self.tool = None
         self._watched = []
+        self._previous_tool = None
 
     # ------------------------------------------------------------ GUI
     def initGui(self):
@@ -36,7 +37,8 @@ class AlignEdgePlugin(object):
         self.action.setToolTip(
             "<b>Align Edge</b><br>Hover an edge to preview it (solid) and the adjacent "
             "edge it will snap to (dashed); click to align. Works on all visible line and "
-            "polygon layers in edit mode. Tab cycles targets, Esc clears.")
+            "polygon layers in edit mode. Tab cycles targets, Esc clears. Click the button "
+            "again (or press Esc with nothing highlighted) to turn it off.")
         self.action.triggered.connect(self.activate_tool)
 
         self.settings_action = QAction(QIcon(), "Align Edge Settings…", mw)
@@ -57,6 +59,7 @@ class AlignEdgePlugin(object):
 
         self.tool = AlignEdgeTool(self.iface, self.settings)
         self.tool.setAction(self.action)
+        self.tool.exit_requested = self.deactivate_tool
 
         self.canvas.layersChanged.connect(self.update_enabled)
         self.canvas.scaleChanged.connect(self.update_enabled)
@@ -81,17 +84,40 @@ class AlignEdgePlugin(object):
         self.iface.removePluginVectorMenu(MENU, self.settings_action)
         self.toolbar.removeAction(self.toolbar_action)
         if self.tool is not None:
+            self.tool.exit_requested = None
             self.tool.cleanup()
             self.tool.deleteLater()
             self.tool = None
         self.button.deleteLater()
 
     # ------------------------------------------------------------ actions
-    def activate_tool(self):
-        if not self.action.isEnabled():
+    def activate_tool(self, checked=True):
+        """The button toggles: on starts the tool, a second click turns it off."""
+        if self.canvas.mapTool() is self.tool:
+            if checked:
+                self.action.setChecked(True)
+            else:
+                self.deactivate_tool()
             return
+        if not self.action.isEnabled():
+            self.action.setChecked(False)
+            return
+        current = self.canvas.mapTool()
+        self._previous_tool = current if current is not None and current is not self.tool else None
         self.canvas.setMapTool(self.tool)
         self.action.setChecked(True)
+
+    def deactivate_tool(self):
+        """Go back to the tool used before Align Edge (Pan if there was none)."""
+        if self.tool is None or self.canvas.mapTool() is not self.tool:
+            self.action.setChecked(False)
+            return
+        previous, self._previous_tool = self._previous_tool, None
+        if previous is not None and _alive_tool(previous):
+            self.canvas.setMapTool(previous)
+        else:
+            self.iface.actionPan().trigger()
+        self.action.setChecked(False)
 
     def show_settings(self):
         dlg = SettingsDialog(self.settings, self.iface.mainWindow())
@@ -128,7 +154,17 @@ class AlignEdgePlugin(object):
         self.action.setEnabled(enabled)
         if not enabled and self.tool is not None and self.canvas.mapTool() is self.tool:
             # like the native editing tools: drop back to Pan when nothing is editable
+            self._previous_tool = None
             self.iface.actionPan().trigger()
+
+
+def _alive_tool(tool):
+    """A map tool another plugin created may already be deleted."""
+    try:
+        tool.flags()
+        return True
+    except RuntimeError:
+        return False
 
 
 def _alive(obj):

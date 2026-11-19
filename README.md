@@ -37,6 +37,7 @@ Then restart QGIS.
    - The tooltip names the features that will change, the features they align to, the area between the edges, and the largest shift.
 4. Click to align. Each edited layer gets one undo step named **Align Edge**.
 5. Press **Tab** or **Shift+Tab** to cycle through other edges that share the same two end nodes. **Esc** clears the highlight.
+6. To turn the tool off, click the **Align Edge** button again or press **Esc** when nothing is highlighted. You go back to the tool you were using before (Pan if there was none).
 
 An edge is offered when both of its end nodes are shared with another edge. The dropdown on the toolbar button opens **Align Edge Settings**.
 

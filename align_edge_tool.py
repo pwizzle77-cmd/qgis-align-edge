@@ -164,6 +164,7 @@ class AlignEdgeTool(QgsMapTool):
         self._key_filter = _KeyFilter(self)
         self._layers = []
         self._last = None            # (map point, pixel point)
+        self.exit_requested = None   # set by the plugin: Esc with nothing highlighted turns the tool off
         self._reset_hover()
         self._set_busy(False)
 
@@ -885,6 +886,10 @@ class AlignEdgeTool(QgsMapTool):
     def keyPressEvent(self, e):
         key = e.key()
         if key == Qt.Key.Key_Escape:
+            if self._src is None and callable(self.exit_requested):
+                e.accept()
+                self.exit_requested()
+                return
             self._reset_hover()
             if self.overlay is not None:
                 self.overlay.clear_hover()
