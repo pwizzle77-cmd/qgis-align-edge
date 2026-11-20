@@ -46,6 +46,34 @@ class QgisIntegrationTests(unittest.TestCase):
         self.settings = MemorySettings()
         self.layers, self.caches = [], []
 
+    def test_optional_keystone_declaration_registers_and_unregisters_without_a_dependency(self):
+        from unittest.mock import Mock, patch
+        from qgis.PyQt.QtWidgets import QMainWindow, QToolBar
+        from align_edge import plugin
+        win = QMainWindow()
+        toolbar = QToolBar('Advanced Digitizing', win)
+        iface = Mock()
+        iface.mainWindow.return_value = win
+        iface.mapCanvas.return_value = self.canvas
+        iface.advancedDigitizeToolBar.return_value = toolbar
+        win.setProperty('keystone/tool_placements', {'otherTool': {'tab': 'Map'}})
+        try:
+            for _ in range(2):
+                with patch.object(plugin, 'Settings', return_value=self.settings):
+                    controller = plugin.AlignEdgePlugin(iface)
+                controller.initGui()
+                declarations = win.property('keystone/tool_placements')
+                declaration = declarations['mActionAlignEdge']
+                self.assertEqual((declaration['tab'], declaration['group'], declaration['modify_group']),
+                                 ('Edit', 'Tools', 'Alignment'))
+                self.assertEqual(declaration['menu_actions'], ['mActionAlignEdgeSettings'])
+                self.assertIs(win.findChild(type(controller.action), 'mActionAlignEdge'), controller.action)
+                controller.unload()
+                self.assertEqual(win.property('keystone/tool_placements'), {'otherTool': {'tab': 'Map'}})
+                self.assertIsNone(win.findChild(type(controller.action), 'mActionAlignEdge'))
+        finally:
+            win.deleteLater()
+
     def tearDown(self):
         for cache in self.caches:
             cache.clear()

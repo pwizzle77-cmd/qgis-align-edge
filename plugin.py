@@ -42,6 +42,7 @@ class AlignEdgePlugin(object):
         self.action.triggered.connect(self.activate_tool)
 
         self.settings_action = QAction(QIcon(), "Align Edge Settings…", mw)
+        self.settings_action.setObjectName("mActionAlignEdgeSettings")
         self.settings_action.triggered.connect(self.show_settings)
 
         self.menu = QMenu(mw)
@@ -67,8 +68,23 @@ class AlignEdgePlugin(object):
         QgsProject.instance().layersRemoved.connect(self._layers_removed)
         self._watch()
         self.update_enabled()
+        placements = mw.property("keystone/tool_placements")
+        placements = dict(placements) if isinstance(placements, dict) else {}
+        placements[self.action.objectName()] = {
+            "tab": "Edit", "group": "Tools", "modify_group": "Alignment",
+            "description": "Hover an edge to preview it and its target; click to align. "
+                           "Tab cycles targets. Esc cancels. Click Align Edge again to leave the tool.",
+            "menu_actions": [self.settings_action.objectName()],
+        }
+        mw.setProperty("keystone/tool_placements", placements)
 
     def unload(self):
+        mw = self.iface.mainWindow()
+        placements = mw.property("keystone/tool_placements")
+        if isinstance(placements, dict):
+            placements = dict(placements)
+            placements.pop(self.action.objectName(), None)
+            mw.setProperty("keystone/tool_placements", placements)
         if self.tool is not None and self.canvas.mapTool() is self.tool:
             self.canvas.unsetMapTool(self.tool)
         for sig, slot in ((self.canvas.layersChanged, self.update_enabled),
@@ -89,6 +105,11 @@ class AlignEdgePlugin(object):
             self.tool.deleteLater()
             self.tool = None
         self.button.deleteLater()
+        for action in (self.action, self.settings_action):
+            action.setObjectName("")
+            action.setEnabled(False)
+            action.deleteLater()
+        self.menu.deleteLater()
 
     # ------------------------------------------------------------ actions
     def activate_tool(self, checked=True):

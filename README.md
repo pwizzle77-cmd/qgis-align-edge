@@ -6,6 +6,16 @@ It is inspired by ArcGIS Pro. It is not affiliated with Esri.
 
 The button sits on the **Advanced Digitizing** toolbar. The same commands are under **Vector → Align Edge**.
 
+With **Keystone 0.7.0+** enabled, the existing action also appears automatically in
+**Edit > Tools** and **Modify Features > Alignment**. The ribbon button's dropdown
+opens the same Settings command. Enable Align Edge and the entries appear; disable
+it and they disappear. The tool still requires an eligible editable line/polygon
+layer. This optional placement does not require importing Keystone, and Align Edge
+continues to work with QGIS's native interface when Keystone is absent or switched off.
+No ribbon configuration is needed for these placements. Restart QGIS after updating
+both installed plugins, then enable both. The tool is disabled until an eligible
+line or polygon layer is in edit mode.
+
 ## Requirements
 
 - QGIS 3.28 or newer, including QGIS 4

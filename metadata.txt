@@ -4,7 +4,7 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 description=Preview and align shared topology edges, with protected reference targets, exact endpoints and undo support.
 about=Adds an Align Edge tool to the Advanced Digitizing toolbar. It builds a map topology from visible editable line and polygon layers and configured target-only references. Hover to preview the moving edge, target edge, gap area and maximum shift. Click to align every editable owner, using exact target XY and source-derived Z/M. Unsafe endpoint moves are blocked. Tab cycles targets; Esc cancels highlights and queued clicks. Results are validated and written with undo support; failed multi-layer writes roll back without losing prior edits. Reference layers never move and need not be in edit mode.
-version=1.4.0
+version=1.4.1
 author=Charles
 email=pwizzle77@gmail.com
 homepage=https://github.com/pwizzle77-cmd/qgis-align-edge
@@ -16,7 +16,8 @@ experimental=False
 deprecated=False
 icon=icons/align_edge.svg
 hasProcessingProvider=no
-changelog=1.4.0 - Multi-layer failures roll back without losing earlier edits. Esc cancels queued clicks. Alignment copies exact target endpoints and blocks moves that would disconnect unchanged edges. New Z/M values are interpolated from the source. Dense topology work yields in smaller chunks. Restore Defaults stays local until OK. Layer roles include target-only references that do not need edit mode. Source and target versions are checked before writing; stale builds are discarded.
+changelog=1.4.1 - Optional generic Keystone placement: the existing action appears automatically in Edit > Tools and Modify Features > Alignment, with its original toggle, enabled state and Settings action. Unloading removes the declaration and stale actions. Alignment calculations are unchanged.
+ 1.4.0 - Multi-layer failures roll back without losing earlier edits. Esc cancels queued clicks. Alignment copies exact target endpoints and blocks moves that would disconnect unchanged edges. New Z/M values are interpolated from the source. Dense topology work yields in smaller chunks. Restore Defaults stays local until OK. Layer roles include target-only references that do not need edit mode. Source and target versions are checked before writing; stale builds are discarded.
  1.3.3 - Clicking the Align Edge button again turns the tool off and returns to the previous map tool; Esc with nothing highlighted does the same.
  1.3.2 - Error handlers flagged by the plugin security scan now write the error to the diagnostic log instead of silently ignoring it (same fallbacks, no change in behaviour). Metadata: removed the deprecated Qt6 support flag (QGIS 4 support is declared by qgisMaximumVersion=4.99).
  1.3.1 - A redraw that never finishes no longer keeps rebuilding topology on the main thread. While the tool is on, the map draws one layer at a time and preview redraws are paused. A redraw still busy after 2 s is cancelled and painted once; layer data is not read on that turn.
