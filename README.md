@@ -9,11 +9,11 @@ The button sits on the **Advanced Digitizing** toolbar. The same commands are un
 ## Requirements
 
 - QGIS 3.28 or newer, including QGIS 4
-- Line or polygon layers that are visible and in edit mode
+- Visible line or polygon layers in edit mode, with optional target-only reference layers
 
 ## Install
 
-1. Download `align_edge-1.3.2.zip` from the [latest release](https://github.com/pwizzle77-cmd/qgis-align-edge/releases/latest).
+1. Download the plugin zip from the [latest release](https://github.com/pwizzle77-cmd/qgis-align-edge/releases/latest).
 2. In QGIS, open **Plugins → Manage and Install Plugins → Install from ZIP**.
 3. Choose the zip and install it.
 4. Turn the plugin on if QGIS does not enable it automatically.
@@ -29,6 +29,8 @@ Then restart QGIS.
 ## Use
 
 1. Start editing on every line or polygon layer that should take part.
+   For a protected survey or boundary layer, choose **Reference (target only)** under
+   **Align Edge Settings → Participating layers** instead of starting an edit session.
 2. Click **Align Edge** on the Advanced Digitizing toolbar.
 3. Hover an edge.
    - The **solid** edge is the one that will move.
@@ -36,7 +38,7 @@ Then restart QGIS.
    - The shaded area is the gap that the click will close.
    - The tooltip names the features that will change, the features they align to, the area between the edges, and the largest shift.
 4. Click to align. Each edited layer gets one undo step named **Align Edge**.
-5. Press **Tab** or **Shift+Tab** to cycle through other edges that share the same two end nodes. **Esc** clears the highlight.
+5. Press **Tab** or **Shift+Tab** to cycle through other edges that share the same two end nodes. **Esc** clears the highlight and cancels any waiting click.
 6. To turn the tool off, click the **Align Edge** button again or press **Esc** when nothing is highlighted. You go back to the tool you were using before (Pan if there was none).
 
 An edge is offered when both of its end nodes are shared with another edge. The dropdown on the toolbar button opens **Align Edge Settings**.
@@ -58,11 +60,35 @@ Open **Align Edge Settings** from the toolbar dropdown or from **Vector → Alig
 | Cluster tolerance | `0` uses about 1 mm in the map units (1e-8 degrees) |
 | Max shift / edge length | Largest allowed shift, as a multiple of the shorter edge. `0` means no limit |
 | Max vertices in view | Refuses to build a topology that is too large for the current view. Zoom in, or raise the limit |
-| Participating layers | Visible line and polygon layers in edit mode are included. Uncheck a layer to leave it out of this project |
+| Participating layers | Choose Editable source / target, Reference (target only), or Excluded for each layer. References must be visible but need not be editable; they never move |
+
+**Restore Defaults** changes the dialog only. Settings and layer roles are saved
+when you press **OK**; **Cancel** keeps the previous values.
 
 ## How a click is applied
 
-The plugin builds a map topology from the editable layers in view: shared vertices become nodes, and the chains between nodes become edges. The click replaces the solid edge with the shape of the dashed edge on every feature that owns that edge. Lines and polygons are both updated, including multipart features. Curved geometries are left unchanged and reported as a failure. Results that would be empty or invalid are not written. Undo uses the normal QGIS edit buffer.
+The plugin builds a map topology from participating layers in view: shared vertices
+become nodes, and the chains between nodes become edges. The click replaces the
+solid edge with the shape of the dashed edge on every editable feature that owns
+it. A source edge that is also owned by a reference is protected and cannot move.
+Lines and polygons are both updated, including multipart features.
+
+The target's actual XY coordinates, including endpoints, are copied. If shifting
+a clustered endpoint would disconnect an unchanged incident edge, alignment is
+blocked with a message to align the node first. Target owners with conflicting
+coordinates are also rejected. Layers in different CRSs are transformed normally.
+
+For Z/M-enabled source data, existing values outside the changed edge stay as
+they are. New vertices receive interpolated source Z/M values at the same relative
+distance along the source edge; target elevations/measures are not borrowed.
+Unknown source dimensions stay unknown, rather than becoming zero.
+
+Curved sources and targets are not supported; they are rejected instead of writing
+a straight approximation. Empty results and newly invalid polygons are rejected.
+Both source and target cache versions are checked before writing. If any write
+fails or raises an exception, this alignment is rolled back across its layers;
+earlier edits are retained. Each successfully edited layer still has its own
+normal QGIS undo step. This tool does not save layer edits automatically.
 
 ## Develop
 
@@ -72,7 +98,14 @@ The topology rules live in `topology_core.py` and do not import QGIS. From this 
 python -m unittest discover -s tests
 ```
 
-QGIS 3.28+ / Qt5 and QGIS 4 / Qt6 are both supported from the same code (`compat.py`).
+Without QGIS, the geometry-core tests run and QGIS integration tests are skipped.
+With the QGIS Python launcher, tests also exercise actual memory-layer writes,
+rollback, reference roles, exact endpoints, Z/M, mixed CRSs, settings and queued
+click cancellation. Provider reads remain on the main thread while the map is
+idle; native provider operations and individual large index operations can still
+take longer than a topology work slice.
+
+QGIS 3.28+ / Qt5 and QGIS 4 / Qt6 are supported from the same code (`compat.py`).
 
 ## License
 

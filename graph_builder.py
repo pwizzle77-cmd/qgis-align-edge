@@ -18,8 +18,6 @@ was waiting for a map render which never finished; this design keeps
 Align Edge out of that contention.
 """
 
-from collections import defaultdict
-
 from qgis.core import (
     QgsCoordinateTransform,
     QgsExpression,
@@ -70,16 +68,17 @@ class _Entry(object):
 
 
 def finite(v):
-    return v is not None and not (isinstance(v, float) and math.isnan(v))
+    return v is not None and math.isfinite(v)
 
 
 def participating_layers(canvas, settings):
     excluded = settings.excluded_layer_ids()
+    references = settings.reference_layer_ids()
     out = []
     for lyr in canvas.layers():
         if not isinstance(lyr, QgsVectorLayer) or not lyr.isValid():
             continue
-        if not lyr.isEditable() or not is_line_or_polygon(lyr):
+        if not is_line_or_polygon(lyr) or (not lyr.isEditable() and lyr.id() not in references):
             continue
         if lyr.id() in excluded:
             continue
@@ -370,6 +369,7 @@ class FeatureCache(object):
         ctx = GraphContext(self._dest, self)
         snap = Snapshot(ctx, cluster_tol)
         max_v = self.settings.get("max_vertices")
+        references = self.settings.reference_layer_ids()
         count = 0
         for lc in self.layers.values():
             ctx.layers[lc.lid] = lc.layer
@@ -385,7 +385,7 @@ class FeatureCache(object):
                 for pi, rings in enumerate(e.map_parts):
                     for ri, coords in enumerate(rings):
                         snap.parts.append(((lc.lid, fid, pi, ri), coords, lc.polygon,
-                                           e.struct.curved))
+                                           e.struct.curved or lc.lid in references or not lc.layer.isEditable()))
         return snap
 
     def entry(self, lid, fid):
@@ -403,7 +403,6 @@ class GraphContext(object):
         self.cache = cache
         self.layers = {}                      # id -> QgsVectorLayer
         self.features = {}                    # (lid, fid) -> FeatureStruct
-        self.pid_sources = defaultdict(list)  # pid -> [(part_key, vertex index)]
         self._labels = {}
 
     def payload(self, part_key, idx):
@@ -452,17 +451,8 @@ def graph_for_snapshot(snap):
     return graph
 
 
-def finish_context(graph, snap):
-    """After graph.build*(): index which original vertex each node came from."""
-    ctx = snap.ctx
-    for key, p in graph.parts.items():
-        for idx, pid in enumerate(p.vpids):
-            ctx.pid_sources[pid].append((key, idx))
-    return ctx
-
-
 def build_from_snapshot(snap, cancel=None):
     """Pure Python. Returns (graph, ctx)."""
     graph = graph_for_snapshot(snap)
     graph.build(cancel)
-    return graph, finish_context(graph, snap)
+    return graph, snap.ctx

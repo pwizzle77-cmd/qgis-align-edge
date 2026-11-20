@@ -190,5 +190,33 @@ class SnapTests(unittest.TestCase):
         self.assertEqual(g.targets(src), [])
 
 
+class SlicedBuildTests(unittest.TestCase):
+    def test_a_long_part_yields_during_vertex_clustering(self):
+        graph = TopologyGraph(TOL)
+        key = ('long line', 1, 0, 0)
+        graph.add_part(key, [(i, i % 2) for i in range(10000)], False)
+        next(graph.build_steps())
+        self.assertLessEqual(len(graph.parts[key].vpids), 256)
+
+    def test_dense_intersections_yield_inside_the_pair_loop(self):
+        class CountingGraph(TopologyGraph):
+            calls = 0
+
+            def _intersect(self, *args):
+                self.calls += 1
+                return super()._intersect(*args)
+
+        graph = CountingGraph(TOL)
+        for i in range(120):
+            graph.add_part(('lines', i, 0, 0), [(-100, (i + 1) * 0.1), (100, -(i + 1) * 0.1)], False)
+        steps = graph.build_steps()
+        previous = 0
+        for _ in steps:
+            self.assertLessEqual(graph.calls - previous, 256)
+            previous = graph.calls
+        self.assertTrue(graph.built)
+        self.assertGreater(graph.calls, 1000)
+
+
 if __name__ == "__main__":
     unittest.main()

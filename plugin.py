@@ -37,7 +37,7 @@ class AlignEdgePlugin(object):
         self.action.setToolTip(
             "<b>Align Edge</b><br>Hover an edge to preview it (solid) and the adjacent "
             "edge it will snap to (dashed); click to align. Works on all visible line and "
-            "polygon layers in edit mode. Tab cycles targets, Esc clears. Click the button "
+            "polygon layers in edit mode, plus configured target-only references. Tab cycles targets, Esc cancels. Click the button "
             "again (or press Esc with nothing highlighted) to turn it off.")
         self.action.triggered.connect(self.activate_tool)
 
@@ -150,7 +150,9 @@ class AlignEdgePlugin(object):
         self.update_enabled()
 
     def update_enabled(self, *args):
-        enabled = bool(participating_layers(self.canvas, self.settings))
+        references = self.settings.reference_layer_ids()
+        enabled = any(layer.isEditable() and layer.id() not in references
+                      for layer in participating_layers(self.canvas, self.settings))
         self.action.setEnabled(enabled)
         if not enabled and self.tool is not None and self.canvas.mapTool() is self.tool:
             # like the native editing tools: drop back to Pan when nothing is editable

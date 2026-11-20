@@ -13,14 +13,15 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
+    QHeaderView,
+    QTableWidget,
+    QTableWidgetItem,
     QSpinBox,
     QVBoxLayout,
 )
 
 from .compat import is_line_or_polygon
-from .settings import DISPLAY_ALL, DISPLAY_SELECTED
+from .settings import DISPLAY_ALL, DISPLAY_SELECTED, _DEFAULTS
 
 
 class SettingsDialog(QDialog):
@@ -97,22 +98,36 @@ class SettingsDialog(QDialog):
         self.max_v.setValue(s.get("max_vertices"))
         f2.addRow("Max vertices in view", self.max_v)
         lay.addWidget(tol)
+        for field in (self.style, self.width, self.node_size, self.tol_px, self.cluster, self.nearby, self.max_v):
+            field.setMinimumHeight(field.fontMetrics().height() + 8)
 
         lg = QGroupBox("Participating layers (this project)")
         v = QVBoxLayout(lg)
-        v.addWidget(QLabel("Visible line and polygon layers in edit mode take part. "
-                           "Uncheck a layer to exclude it."))
-        self.layers = QListWidget()
+        description = QLabel("Editable layers can move. Reference layers are target-only and need not be in edit mode.")
+        description.setWordWrap(True)
+        v.addWidget(description)
+        self.layers = QTableWidget(0, 2)
+        self.layers.setHorizontalHeaderLabels(["Layer", "Role"])
+        self.layers.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.layers.setMaximumHeight(180)
         excluded = s.excluded_layer_ids()
+        references = s.reference_layer_ids()
         for lyr in sorted(QgsProject.instance().mapLayers().values(), key=lambda layer: layer.name().lower()):
             if not isinstance(lyr, QgsVectorLayer) or not is_line_or_polygon(lyr):
                 continue
-            it = QListWidgetItem(lyr.name())
+            row = self.layers.rowCount()
+            self.layers.insertRow(row)
+            it = QTableWidgetItem(lyr.name())
             it.setData(Qt.ItemDataRole.UserRole, lyr.id())
-            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Unchecked if lyr.id() in excluded
-                             else Qt.CheckState.Checked)
-            self.layers.addItem(it)
+            it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.layers.setItem(row, 0, it)
+            role = QComboBox()
+            role.addItem("Editable source / target", "edit")
+            role.addItem("Reference (target only)", "reference")
+            role.addItem("Excluded", "excluded")
+            value = "excluded" if lyr.id() in excluded else "reference" if lyr.id() in references else "edit"
+            role.setCurrentIndex(role.findData(value))
+            self.layers.setCellWidget(row, 1, role)
         v.addWidget(self.layers)
         lay.addWidget(lg)
 
@@ -125,8 +140,7 @@ class SettingsDialog(QDialog):
         lay.addWidget(bb)
 
     def _defaults(self):
-        s = self.settings
-        s.reset()
+        s = _DEFAULTS  # Defaults remain local to the dialog until OK.
         self.style.setCurrentIndex(max(0, self.style.findData(s.get("display_style"))))
         self.graph_color.setColor(QColor(s.get("graph_color")))
         self.hi_color.setColor(QColor(s.get("highlight_color")))
@@ -140,8 +154,8 @@ class SettingsDialog(QDialog):
         self.cluster.setValue(s.get("cluster_tolerance"))
         self.nearby.setValue(s.get("max_shift_ratio"))
         self.max_v.setValue(s.get("max_vertices"))
-        for i in range(self.layers.count()):
-            self.layers.item(i).setCheckState(Qt.CheckState.Checked)
+        for i in range(self.layers.rowCount()):
+            self.layers.cellWidget(i, 1).setCurrentIndex(0)
 
     def accept(self):
         s = self.settings
@@ -159,9 +173,14 @@ class SettingsDialog(QDialog):
         s.set("max_shift_ratio", self.nearby.value())
         s.set("max_vertices", self.max_v.value())
         excluded = set()
-        for i in range(self.layers.count()):
-            it = self.layers.item(i)
-            if it.checkState() != Qt.CheckState.Checked:
-                excluded.add(it.data(Qt.ItemDataRole.UserRole))
+        references = set()
+        for i in range(self.layers.rowCount()):
+            lid = self.layers.item(i, 0).data(Qt.ItemDataRole.UserRole)
+            role = self.layers.cellWidget(i, 1).currentData()
+            if role == "excluded":
+                excluded.add(lid)
+            elif role == "reference":
+                references.add(lid)
         s.set_excluded_layer_ids(excluded)
+        s.set_reference_layer_ids(references)
         super().accept()

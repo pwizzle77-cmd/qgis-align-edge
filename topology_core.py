@@ -72,6 +72,7 @@ class AlignPlan(object):
         self.shift_pair = None     # ((x,y),(x,y)) realising max_shift
         self.gap_ring = []         # polygon between the two edges
         self.area = 0.0
+        self.target_vertices = {}  # pid -> (target part key, original index or None, exact map XY)
 
     @property
     def ok(self):
@@ -353,15 +354,17 @@ class TopologyGraph(object):
         P = self.points
         tol = self.tol
         ticks = 0
-        STEP = 3000
+        STEP = 256
 
         # 1. cluster vertices
         for p in self.parts.values():
-            p.vpids = [self._snap(x, y) for x, y in p.coords]
-            ticks += len(p.coords)
-            if ticks >= STEP:
-                ticks = 0
-                yield
+            p.vpids = []
+            for x, y in p.coords:
+                p.vpids.append(self._snap(x, y))
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
 
         # 2. raw segments
         segs = []          # (part, k, a, b)
@@ -370,6 +373,10 @@ class TopologyGraph(object):
             m = n if p.closed else n - 1
             for k in range(m):
                 segs.append((p, k, p.vpids[k], p.vpids[(k + 1) % n]))
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
         splits = [[] for _ in segs]
 
         lengths = sorted(math.hypot(P[b][0] - P[a][0], P[b][1] - P[a][1])
@@ -402,15 +409,15 @@ class TopologyGraph(object):
         # global "seen" set (that used gigabytes on dense data).
         for c, lst in grid.items():
             L = len(lst)
-            ticks += L * L // 2 + 1
-            if ticks >= STEP:
-                ticks = 0
-                yield
             for ii in range(L):
                 i = lst[ii]
                 bi = bbox[i]
                 ci = seg_cells[i]
                 for jj in range(ii + 1, L):
+                    ticks += 1
+                    if ticks >= STEP:
+                        ticks = 0
+                        yield
                     j = lst[jj]
                     bj = bbox[j]
                     if bj[0] > bi[2] or bj[2] < bi[0] or bj[1] > bi[3] or bj[3] < bi[1]:
@@ -430,11 +437,19 @@ class TopologyGraph(object):
                 entries.append((p.vpids[k], k))
                 for t, pid in sorted(splits[idx + k]):
                     entries.append((pid, None))
+                ticks += 1 + len(splits[idx + k])
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
             if not p.closed:
                 entries.append((p.vpids[-1], n - 1))
             idx += m
             out = []
             for e in entries:
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
                 if out and out[-1][0] == e[0]:
                     if out[-1][1] is None and e[1] is not None:
                         out[-1] = e
@@ -459,14 +474,26 @@ class TopologyGraph(object):
                 a, b = E[i][0], E[(i + 1) % L][0]
                 if a != b:
                     occ[_seg_key(a, b)].append((p.key, i))
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
         owners = {sk: frozenset(k for k, _ in o) for sk, o in occ.items()}
         adj = defaultdict(set)
         for a, b in occ:
             adj[a].add(b)
             adj[b].add(a)
+            ticks += 1
+            if ticks >= STEP:
+                ticks = 0
+                yield
 
         nodes = set()
         for v, nb in adj.items():
+            ticks += 1
+            if ticks >= STEP:
+                ticks = 0
+                yield
             if len(nb) != 2:
                 nodes.add(v)
                 continue
@@ -487,6 +514,7 @@ class TopologyGraph(object):
             path = [start, nxt]
             visited.add(_seg_key(start, nxt))
             prev, cur = start, nxt
+            walked = 0
             while cur not in nodes:
                 cands = [w for w in adj[cur] if w != prev]
                 if not cands:
@@ -499,6 +527,9 @@ class TopologyGraph(object):
                 visited.add(sk)
                 path.append(w)
                 prev, cur = cur, w
+                walked += 1
+                if walked % STEP == 0:
+                    yield
                 if cur == start:
                     break
             return path
@@ -507,13 +538,17 @@ class TopologyGraph(object):
             for nb in sorted(adj.get(nd, ())):
                 if _seg_key(nd, nb) in visited:
                     continue
-                path = walk(nd, nb)
+                path = yield from walk(nd, nb)
                 edges.append(path)
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
         # node-less cycles (e.g. an isolated ring)
         for sk in sorted(occ):
             if sk in visited:
                 continue
-            path = walk(sk[0], sk[1])
+            path = yield from walk(sk[0], sk[1])
             edges.append(path)
 
         self.edges = []
@@ -523,13 +558,17 @@ class TopologyGraph(object):
             self.edges.append(e)
             for i in range(len(path) - 1):
                 self.seg_edge[_seg_key(path[i], path[i + 1])] = eid
+                ticks += 1
+                if ticks >= STEP:
+                    ticks = 0
+                    yield
             self.node_edges[e.start].add(eid)
             self.node_edges[e.end].add(eid)
             if not e.is_loop:
                 self._by_ends[frozenset((e.start, e.end))].append(eid)
 
         yield
-        self._build_hit_index()
+        yield from self._build_hit_index()
         self.built = True
 
     def _intersect(self, segs, splits, i, j):
@@ -585,6 +624,8 @@ class TopologyGraph(object):
         self._hsegs = []
         for sk, eid in self.seg_edge.items():
             self._hsegs.append((P[sk[0]], P[sk[1]], eid))
+            if len(self._hsegs) % 256 == 0:
+                yield
         if not self._hsegs:
             self._hgrid = {}
             return
@@ -594,6 +635,8 @@ class TopologyGraph(object):
         for si, (a, b, _) in enumerate(self._hsegs):
             for c in self._cells_for_segment(a, b, self._hcell, 0.0):
                 g[c].append(si)
+            if si % 256 == 0:
+                yield
         self._hgrid = g
 
     def hit_test(self, x, y, radius):
@@ -685,8 +728,36 @@ class TopologyGraph(object):
             return plan
 
         tpids = list(tgt.pids) if tgt.start == src.start else list(reversed(tgt.pids))
+        needed = set(tpids)
+        for key in sorted(tgt.owners, key=repr):
+            part = self.parts[key]
+            line = part.coords + part.coords[:1] if part.closed else part.coords
+            for pid, index in part.entries:
+                if pid not in needed:
+                    continue
+                xy = part.coords[index] if index is not None else _dist_pt_line(self.points[pid], line)[1]
+                if pid in plan.target_vertices and plan.target_vertices[pid][2] != xy:
+                    plan.error = "target owners have different coordinates at a clustered vertex"
+                    return plan
+                plan.target_vertices[pid] = (key, index, xy)
+
+        # Move the selected edge's ends only when unchanged incident edges already meet the target.
+        for pid in (src.start, src.end):
+            xy = plan.target_vertices[pid][2]
+            incident = {key for eid in self.node_edges.get(pid, ()) for key in self.edges[eid].owners}
+            for key in incident:
+                part = self.parts[key]
+                entries = [(p, i) for p, i in part.entries if p == pid]
+                if not entries or key in tgt.owners or (key in src.owners and len(entries) == 1):
+                    continue
+                line = part.coords + part.coords[:1] if part.closed else part.coords
+                for _p, index in entries:
+                    old = part.coords[index] if index is not None else _dist_pt_line(self.points[pid], line)[1]
+                    if old != xy:
+                        plan.error = "moving an endpoint would disconnect an unchanged edge; align the node first"
+                        return plan
         scoords = self.edge_coords(src_id)
-        tcoords = [self.points[p] for p in tpids]
+        tcoords = [plan.target_vertices[p][2] for p in tpids]
         plan.max_shift, plan.shift_pair = hausdorff(scoords, tcoords)
         plan.gap_ring = scoords + list(reversed(tcoords))[1:-1]
         plan.area = ring_area(plan.gap_ring)
@@ -695,7 +766,7 @@ class TopologyGraph(object):
         for key in sorted(src.owners, key=repr):
             p = self.parts[key]
             if p.locked:
-                plan.error = "curved geometry cannot be aligned"
+                plan.error = "an owning feature is target-only or has curved geometry"
                 return plan
             E = p.entries
             L = len(E)
@@ -730,12 +801,8 @@ class TopologyGraph(object):
                 plan.error = "internal: edge orientation mismatch"
                 return plan
 
-            def emit(i):
-                pid, orig = E[i % L]
-                return ("orig", orig) if orig is not None else ("pid", pid)
-
             run_end = i0 + k
-            run = [emit(i0)] + [("pid", q) for q in interior] + [emit(run_end)]
+            run = [("pid", first)] + [("pid", q) for q in interior] + [("pid", E[run_end % L][0])]
             if p.closed:
                 rest = [("orig", E[i % L][1]) for i in range(run_end + 1, i0 + L)
                         if E[i % L][1] is not None]
@@ -748,7 +815,7 @@ class TopologyGraph(object):
             # collapse / degeneracy check in map space
             pts = []
             for kind, v in items:
-                c = p.coords[v] if kind == "orig" else self.points[v]
+                c = p.coords[v] if kind == "orig" else plan.target_vertices[v][2]
                 if not pts or pts[-1] != c:
                     pts.append(c)
             if p.closed:

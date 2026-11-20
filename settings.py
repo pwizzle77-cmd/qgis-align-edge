@@ -60,6 +60,13 @@ class Settings(object):
     def set_excluded_layer_ids(self, ids):
         QgsProject.instance().writeEntry(_PROJECT_SCOPE, "excluded_layers", sorted(ids))
 
+    def reference_layer_ids(self):
+        val, ok = QgsProject.instance().readListEntry(_PROJECT_SCOPE, "reference_layers")
+        return set(val) if ok else set()
+
+    def set_reference_layer_ids(self, ids):
+        QgsProject.instance().writeEntry(_PROJECT_SCOPE, "reference_layers", sorted(ids))
+
     # --------------------------------------------------- derived values
     def search_radius(self, canvas):
         """Hover / click tolerance in map units.

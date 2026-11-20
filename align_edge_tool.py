@@ -41,7 +41,7 @@ from qgis.PyQt.QtGui import QCursor
 from . import diag
 from .compat import MSG_WARNING
 from .edge_writer import AlignFailed, apply_changes, build_changes
-from .graph_builder import BuildError, FeatureCache, finish_context, graph_for_snapshot
+from .graph_builder import BuildError, FeatureCache, graph_for_snapshot
 from .overlay import Overlay
 from .render_guard import (
     MAX_RENDER_RECOVERIES,
@@ -300,6 +300,9 @@ class AlignEdgeTool(QgsMapTool):
         if not self._stale:
             diag.log("data changed -> topology stale")
         self._stale = True
+        self._gen += 1
+        self._job = None
+        self._step_timer.stop()
         self._set_busy(True)
         self._pending_click = None
         self._run_click_after_build = False
@@ -626,7 +629,7 @@ class AlignEdgeTool(QgsMapTool):
                 next(steps)
         except StopIteration:
             self._job = None
-            ctx = finish_context(graph, snap)
+            ctx = snap.ctx
             diag.log("build #{} done in {:.2f} s: {} edges, {} nodes".format(
                 gen, time.perf_counter() - t0, len(graph.edges), len(graph.nodes)))
             self._install(graph, ctx, None)
@@ -737,7 +740,7 @@ class AlignEdgeTool(QgsMapTool):
         if plan is None:
             self.overlay.show_hover(src_coords, None, None, ends, False)
         else:
-            self.overlay.show_hover(src_coords, g.edge_coords(plan.tgt.id),
+            self.overlay.show_hover(src_coords, [plan.target_vertices[p][2] for p in plan.tgt.pids],
                                     plan.gap_ring, ends, plan.ok)
         if self.settings.get("show_tooltip"):
             self.overlay.tip.show_at(self._tooltip(src, plan), pix)
@@ -886,6 +889,8 @@ class AlignEdgeTool(QgsMapTool):
     def keyPressEvent(self, e):
         key = e.key()
         if key == Qt.Key.Key_Escape:
+            self._pending_click = None
+            self._run_click_after_build = False
             if self._src is None and callable(self.exit_requested):
                 e.accept()
                 self.exit_requested()
