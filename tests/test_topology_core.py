@@ -190,6 +190,57 @@ class SnapTests(unittest.TestCase):
         self.assertEqual(g.targets(src), [])
 
 
+class ClusteredTargetOwnerTests(unittest.TestCase):
+    """Target owners whose own vertex sits a hair off the clustered node.
+
+    Real adjoining layers are rarely digitized to the exact same vertex;
+    they only need to fall within the cluster tolerance to be treated as
+    the same topology node. plan_align must accept that, not demand
+    bit-for-bit equality.
+    """
+
+    def test_within_cluster_tolerance_aligns(self):
+        g = TopologyGraph(TOL)
+        A = ("A", 1, 0, 0)
+        B = ("B", 2, 0, 0)
+        C = ("C", 3, 0, 0)
+        g.add_part(A, [(0, 0), (10, 0), (10, 10), (0, 10)], True)
+        g.add_part(B, [(10, 0), (20, 0), (20, 10), (10, 10), (10.5, 5)], True)
+        # C traces the same bulge as B but its own vertex is a third of a
+        # tolerance away - still the same clustered node.
+        g.add_part(C, [(10, 10), (10.5, 5 + TOL / 3.0), (10, 0), (9, 0), (9, 10)], True)
+        g.build()
+        src = g.hit_test(10.0, 5.0, 0.1)[0]
+        self.assertEqual(g.edges[src].owners, frozenset([A]))
+        tgt = g.targets(src)[0][0]
+        self.assertEqual(g.edges[tgt].owners, frozenset([B, C]))
+        plan = g.plan_align(src, tgt)
+        self.assertTrue(plan.ok, plan.error)
+
+    def test_beyond_cluster_tolerance_is_rejected(self):
+        g = TopologyGraph(TOL)
+        A = ("A", 1, 0, 0)
+        B = ("B", 2, 0, 0)
+        C = ("C", 3, 0, 0)
+        D = ("D", 4, 0, 0)
+        g.add_part(A, [(0, 0), (10, 0), (10, 10), (0, 10)], True)
+        # D is added first so its own (unperturbed) vertex becomes the
+        # clustered node's spatial anchor; B and C each sit within
+        # tolerance of D (so all three still cluster together) but on
+        # opposite sides of it, almost two tolerances apart from each other.
+        g.add_part(D, [(10, 10), (10.5, 5), (10, 0), (7, 0), (7, 10)], True)
+        g.add_part(B, [(10, 0), (20, 0), (20, 10), (10, 10), (10.5, 5 + TOL * 0.9)], True)
+        g.add_part(C, [(10, 10), (10.5, 5 - TOL * 0.9), (10, 0), (9, 0), (9, 10)], True)
+        g.build()
+        src = g.hit_test(10.0, 5.0, 0.1)[0]
+        self.assertEqual(g.edges[src].owners, frozenset([A]))
+        tgt = g.targets(src)[0][0]
+        self.assertEqual(g.edges[tgt].owners, frozenset([B, C, D]))
+        plan = g.plan_align(src, tgt)
+        self.assertFalse(plan.ok)
+        self.assertIn("clustered vertex", plan.error)
+
+
 class SlicedBuildTests(unittest.TestCase):
     def test_a_long_part_yields_during_vertex_clustering(self):
         graph = TopologyGraph(TOL)

@@ -736,10 +736,13 @@ class TopologyGraph(object):
                 if pid not in needed:
                     continue
                 xy = part.coords[index] if index is not None else _dist_pt_line(self.points[pid], line)[1]
-                if pid in plan.target_vertices and plan.target_vertices[pid][2] != xy:
-                    plan.error = "target owners have different coordinates at a clustered vertex"
-                    return plan
-                plan.target_vertices[pid] = (key, index, xy)
+                if pid in plan.target_vertices:
+                    ox, oy = plan.target_vertices[pid][2]
+                    if math.hypot(ox - xy[0], oy - xy[1]) > self.tol:
+                        plan.error = "target owners have different coordinates at a clustered vertex"
+                        return plan
+                else:
+                    plan.target_vertices[pid] = (key, index, xy)
 
         # Move the selected edge's ends only when unchanged incident edges already meet the target.
         for pid in (src.start, src.end):
@@ -753,7 +756,7 @@ class TopologyGraph(object):
                 line = part.coords + part.coords[:1] if part.closed else part.coords
                 for _p, index in entries:
                     old = part.coords[index] if index is not None else _dist_pt_line(self.points[pid], line)[1]
-                    if old != xy:
+                    if math.hypot(old[0] - xy[0], old[1] - xy[1]) > self.tol:
                         plan.error = "moving an endpoint would disconnect an unchanged edge; align the node first"
                         return plan
         scoords = self.edge_coords(src_id)
