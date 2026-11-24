@@ -82,7 +82,7 @@ class SettingsDialog(QDialog):
         self.cluster.setSpecialValueText("Auto (1 mm)")
         self.cluster.setClearValue(0)
         self.cluster.setValue(s.get("cluster_tolerance"))
-        f2.addRow("Cluster tolerance (map units)", self.cluster)
+        f2.addRow("Cluster tolerance (map units, this project)", self.cluster)
         self.nearby = QgsDoubleSpinBox()
         self.nearby.setDecimals(2)
         self.nearby.setRange(0, 100)
@@ -172,8 +172,11 @@ class SettingsDialog(QDialog):
         s.set("cluster_tolerance", self.cluster.value())
         s.set("max_shift_ratio", self.nearby.value())
         s.set("max_vertices", self.max_v.value())
-        excluded = set()
-        references = set()
+        # a layer whose data is unavailable isn't listed: it keeps its role
+        hidden = set(QgsProject.instance().mapLayers()) - {
+            self.layers.item(i, 0).data(Qt.ItemDataRole.UserRole) for i in range(self.layers.rowCount())}
+        excluded = s.excluded_layer_ids() & hidden
+        references = s.reference_layer_ids() & hidden
         for i in range(self.layers.rowCount()):
             lid = self.layers.item(i, 0).data(Qt.ItemDataRole.UserRole)
             role = self.layers.cellWidget(i, 1).currentData()

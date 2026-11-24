@@ -37,8 +37,9 @@ class AlignEdgePlugin(object):
         self.action.setToolTip(
             "<b>Align Edge</b><br>Hover an edge to preview it (solid) and the adjacent "
             "edge it will snap to (dashed); click to align. Works on all visible line and "
-            "polygon layers in edit mode, plus configured target-only references. Tab cycles targets, Esc cancels. Click the button "
-            "again (or press Esc with nothing highlighted) to turn it off.")
+            "polygon layers in edit mode, plus configured target-only references. Tab cycles "
+            "targets, Esc cancels. Click the button again (or press Esc with nothing "
+            "highlighted) to turn it off.")
         self.action.triggered.connect(self.activate_tool)
 
         self.settings_action = QAction(QIcon(), "Align Edge Settings…", mw)
@@ -51,9 +52,12 @@ class AlignEdgePlugin(object):
         self.button.setDefaultAction(self.action)
         self.button.setMenu(self.menu)
         self.button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.button.setAutoRaise(True)
 
         self.toolbar = self.iface.advancedDigitizeToolBar()
         self.toolbar_action = self.toolbar.addWidget(self.button)
+        self.button.setIconSize(self.toolbar.iconSize())
+        self.toolbar.iconSizeChanged.connect(self.button.setIconSize)
 
         self.iface.addPluginToVectorMenu(MENU, self.action)
         self.iface.addPluginToVectorMenu(MENU, self.settings_action)
@@ -63,7 +67,6 @@ class AlignEdgePlugin(object):
         self.tool.exit_requested = self.deactivate_tool
 
         self.canvas.layersChanged.connect(self.update_enabled)
-        self.canvas.scaleChanged.connect(self.update_enabled)
         QgsProject.instance().layersAdded.connect(self._watch)
         QgsProject.instance().layersRemoved.connect(self._layers_removed)
         self._watch()
@@ -85,12 +88,11 @@ class AlignEdgePlugin(object):
             placements = dict(placements)
             placements.pop(self.action.objectName(), None)
             mw.setProperty("keystone/tool_placements", placements)
-        if self.tool is not None and self.canvas.mapTool() is self.tool:
-            self.canvas.unsetMapTool(self.tool)
+        self.deactivate_tool()
         for sig, slot in ((self.canvas.layersChanged, self.update_enabled),
-                          (self.canvas.scaleChanged, self.update_enabled),
                           (QgsProject.instance().layersAdded, self._watch),
-                          (QgsProject.instance().layersRemoved, self._layers_removed)):
+                          (QgsProject.instance().layersRemoved, self._layers_removed),
+                          (self.toolbar.iconSizeChanged, self.button.setIconSize)):
             try:
                 sig.disconnect(slot)
             except (TypeError, RuntimeError):
@@ -173,7 +175,7 @@ class AlignEdgePlugin(object):
     def update_enabled(self, *args):
         references = self.settings.reference_layer_ids()
         enabled = any(layer.isEditable() and layer.id() not in references
-                      for layer in participating_layers(self.canvas, self.settings))
+                      for layer in participating_layers(self.canvas, self.settings, any_scale=True))
         self.action.setEnabled(enabled)
         if not enabled and self.tool is not None and self.canvas.mapTool() is self.tool:
             # like the native editing tools: drop back to Pan when nothing is editable

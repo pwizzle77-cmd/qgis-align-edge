@@ -31,6 +31,9 @@ def _resolve(item, part_key, plan, ctx, layer, dimensions):
     kind, v = item
     if kind == "orig":
         return ctx.payload(part_key, v)
+    if kind == "move":          # a joined feature's own vertex: new XY, its own Z/M
+        index, v = v
+        dimensions = {v: ctx.payload(part_key, index)[2:]}
 
     src_key, index, xy = plan.target_vertices[v]
     if index is not None and ctx.layers[src_key[0]].crs() == layer.crs():
@@ -107,16 +110,25 @@ def _point(xyzm, has_z, has_m):
     return QgsPoint(x, y, z, m, wkbType=kind)
 
 
+def _without_repeats(items, coords, closed):
+    """Drop a vertex this edit put on top of its neighbour. Untouched vertices always stay
+    (a vertical segment has two vertices at one XY)."""
+    out = []
+
+    def repeats(a, b):
+        return (a[0] != "orig" or b[0] != "orig") and a[1][:2] == b[1][:2]
+
+    for (kind, _v), xyzm in zip(items, coords):
+        if not (out and repeats(out[-1], (kind, xyzm))):
+            out.append((kind, xyzm))
+    while closed and len(out) > 1 and repeats(out[0], out[-1]):
+        out.pop()
+    return [xyzm for _kind, xyzm in out]
+
+
 def _line(coords, fs, close):
-    pts = []
-    for c in coords:
-        p = _point(c, fs.has_z, fs.has_m)
-        if pts and pts[-1].x() == p.x() and pts[-1].y() == p.y():
-            continue
-        pts.append(p)
+    pts = [_point(c, fs.has_z, fs.has_m) for c in coords]
     if close:
-        while len(pts) > 1 and pts[0].x() == pts[-1].x() and pts[0].y() == pts[-1].y():
-            pts.pop()
         pts.append(pts[0].clone())
     return QgsLineString(pts)
 
@@ -176,9 +188,9 @@ def build_changes(plan, graph, ctx):
         rings = [[list(r) for r in part] for part in fs.parts]
         for (pi, ri), items in ring_items.items():
             key = (lid, fid, pi, ri)
-            dimensions = _dimensions(plan, key, graph, ctx)
-            rings[pi][ri] = [_resolve(it, key, plan, ctx, layer, dimensions)
-                             for it in items]
+            dimensions = _dimensions(plan, key, graph, ctx) if key in plan.src.owners else {}
+            rings[pi][ri] = _without_repeats(
+                items, [_resolve(it, key, plan, ctx, layer, dimensions) for it in items], fs.polygon)
         new = _rebuild(fs, rings)
         if new.isNull() or new.isEmpty():
             raise AlignFailed("result for {} is empty".format(ctx.label((lid, fid))))

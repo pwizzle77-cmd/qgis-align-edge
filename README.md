@@ -65,9 +65,9 @@ Open **Align Edge Settings** from the toolbar dropdown or from **Vector → Alig
 | Colors, width, node size | Graph, highlight, and cannot-align colors |
 | Shade the area between the two edges | Fill the gap in the preview |
 | Tooltip | Turn the hover description on or off |
-| Diagnostic log | Write `align_edge_debug.log` in the plugin folder |
+| Diagnostic log | Write `align_edge_debug.log` in the plugin folder. Off by default |
 | Hover / click tolerance | `0` follows the project snapping tolerance |
-| Cluster tolerance | `0` uses about 1 mm in the map units (1e-8 degrees) |
+| Cluster tolerance | `0` uses about 1 mm in the map units (1e-8 degrees). Saved with the project |
 | Max shift / edge length | Largest allowed shift, as a multiple of the shorter edge. `0` means no limit |
 | Max vertices in view | Refuses to build a topology that is too large for the current view. Zoom in, or raise the limit |
 | Participating layers | Choose Editable source / target, Reference (target only), or Excluded for each layer. References must be visible but need not be editable; they never move |
@@ -83,18 +83,24 @@ solid edge with the shape of the dashed edge on every editable feature that owns
 it. A source edge that is also owned by a reference is protected and cannot move.
 Lines and polygons are both updated, including multipart features.
 
-The target's actual XY coordinates, including endpoints, are copied. If shifting
-a clustered endpoint would disconnect an unchanged incident edge, alignment is
+The target's actual XY coordinates, including endpoints, are copied. When that shifts
+an end node within the cluster tolerance, the vertices of other editable features
+joined at exactly that point move with it, so nothing comes apart; they keep their own
+Z/M, and the tooltip says how many. If a joined feature can't move (a reference or a
+curve), or it meets the edge further away than the cluster tolerance, alignment is
 blocked with a message to align the node first. Target owners with conflicting
 coordinates are also rejected. Layers in different CRSs are transformed normally.
 
-For Z/M-enabled source data, existing values outside the changed edge stay as
+The whole moving edge must be in view. A neighbour sharing an off-screen part is not
+loaded and would be left behind, so the preview asks you to zoom out instead.
+
+For Z/M-enabled source data, existing vertices and values outside the changed edge stay as
 they are. New vertices receive interpolated source Z/M values at the same relative
 distance along the source edge; target elevations/measures are not borrowed.
 Unknown source dimensions stay unknown, rather than becoming zero.
 
-Curved sources and targets are not supported; they are rejected instead of writing
-a straight approximation. Empty results and newly invalid polygons are rejected.
+Features containing arcs are not supported; they are rejected instead of writing
+a straight approximation. Straight features in curve layers are supported. Empty results and newly invalid polygons are rejected.
 Both source and target cache versions are checked before writing. If any write
 fails or raises an exception, this alignment is rolled back across its layers;
 earlier edits are retained. Each successfully edited layer still has its own
@@ -102,7 +108,7 @@ normal QGIS undo step. This tool does not save layer edits automatically.
 
 ## Develop
 
-The topology rules live in `topology_core.py` and do not import QGIS. From this folder:
+The topology rules live in `topology_core.py` and do not import QGIS. From this folder, whatever it is called:
 
 ```text
 python -m unittest discover -s tests

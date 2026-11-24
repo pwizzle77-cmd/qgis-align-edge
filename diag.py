@@ -13,7 +13,7 @@ import time
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_edge_debug.log")
 _MAX_BYTES = 1024 * 1024
-_enabled = True
+_enabled = False
 _fh = None
 _seen = set()
 

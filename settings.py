@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Persistent options for Align Edge (QgsSettings + per-project layer filter)."""
+"""Persistent options for Align Edge (QgsSettings; tolerance and layer roles per project)."""
 
 from qgis.core import Qgis, QgsProject, QgsSettings, QgsTolerance, QgsUnitTypes
 
@@ -22,7 +22,7 @@ _DEFAULTS = {
     "show_gap_fill": True,
     "max_vertices": 60000,
     "max_shift_ratio": 2.0,         # 0 = no limit
-    "diagnostic_log": True,
+    "diagnostic_log": False,
 }
 
 _PREFIX = "AlignEdge/"
@@ -33,24 +33,23 @@ class Settings(object):
 
     def get(self, key):
         default = _DEFAULTS[key]
+        if key == "cluster_tolerance":      # map units: 0.25 ft must not follow into a degrees project
+            return QgsProject.instance().readDoubleEntry(_PROJECT_SCOPE, key, default)[0]
         val = QgsSettings().value(_PREFIX + key, default)
         if isinstance(default, bool):
             if isinstance(val, str):
                 return val.lower() in ("1", "true", "yes")
             return bool(val)
-        if isinstance(default, int):
-            return int(val)
-        if isinstance(default, float):
-            return float(val)
-        return str(val)
+        try:
+            return type(default)(val)
+        except (TypeError, ValueError):
+            return default
 
     def set(self, key, value):
+        if key == "cluster_tolerance":
+            QgsProject.instance().writeEntryDouble(_PROJECT_SCOPE, key, value)
+            return
         QgsSettings().setValue(_PREFIX + key, value)
-
-    def reset(self):
-        s = QgsSettings()
-        for k in _DEFAULTS:
-            s.remove(_PREFIX + k)
 
     # --------------------------------------------------- per-project layers
     def excluded_layer_ids(self):

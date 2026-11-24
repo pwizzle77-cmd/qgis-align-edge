@@ -37,6 +37,7 @@ from qgis.core import (
 from qgis.gui import QgsMapTool
 from qgis.PyQt.QtCore import QEvent, QObject, Qt, QTimer
 from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtWidgets import QApplication
 
 from . import diag
 from .compat import MSG_WARNING
@@ -164,6 +165,7 @@ class AlignEdgeTool(QgsMapTool):
         self._key_filter = _KeyFilter(self)
         self._layers = []
         self._last = None            # (map point, pixel point)
+        self._press = None           # where the left button went down
         self.exit_requested = None   # set by the plugin: Esc with nothing highlighted turns the tool off
         self._reset_hover()
         self._set_busy(False)
@@ -714,7 +716,12 @@ class AlignEdgeTool(QgsMapTool):
 
     def _plan(self, tgt):
         if tgt not in self._plans:
-            self._plans[tgt] = self.graph.plan_align(self._src, tgt)
+            plan = self._plans[tgt] = self.graph.plan_align(self._src, tgt)
+            if plan.ok:     # never offer what a click would refuse
+                try:
+                    build_changes(plan, self.graph, self.ctx)
+                except AlignFailed as ex:
+                    plan.error = str(ex)
         return self._plans[tgt]
 
     def cycle_target(self, step=1):
@@ -805,7 +812,11 @@ class AlignEdgeTool(QgsMapTool):
                 stats = "area between edges {} &middot; ".format(
                     self._fmt_area(da, plan.gap_ring)) + stats
             rows.append(stats)
-            touching = g.touching_features(src.id)
+            moved = {k[:2] for k, _ in plan.moved} - {k[:2] for k in src.owners}
+            if moved:
+                rows.append("Also moves the shared end of {} joined feature(s), within the cluster "
+                            "tolerance".format(len(moved)))
+            touching = g.touching_features(src.id) - moved
             if touching:
                 rows.append("<span style='color:#555'>Unchanged: {} feature(s) touching the "
                             "end nodes</span>".format(len(touching)))
@@ -820,10 +831,17 @@ class AlignEdgeTool(QgsMapTool):
         return "<br>".join(rows)
 
     # ------------------------------------------------------------ actions
+    def canvasPressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press = e.pixelPoint()
+
     def canvasReleaseEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         mp, pix = e.mapPoint(), e.pixelPoint()
+        press, self._press = self._press, None
+        if press is not None and (pix - press).manhattanLength() > QApplication.startDragDistance():
+            return      # a drag is not a click
         if self._stale:
             self._busy_tip(pix, "Updating topology&hellip; try again in a moment")
             return

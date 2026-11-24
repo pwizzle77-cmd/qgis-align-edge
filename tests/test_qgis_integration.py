@@ -1,13 +1,21 @@
 """Real QGIS checks for safe writes, exact XY, dimensions, references and UI state."""
+import importlib.util
 import math
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Load this folder as the align_edge package, whatever the clone is called.
+ROOT = Path(__file__).resolve().parents[1]
+if 'align_edge' not in sys.modules:
+    spec = importlib.util.spec_from_file_location('align_edge', ROOT / '__init__.py',
+                                                  submodule_search_locations=[str(ROOT)])
+    sys.modules['align_edge'] = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sys.modules['align_edge'])
 try:
-    from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsGeometry, QgsProject, QgsRectangle, QgsVectorLayer, QgsWkbTypes
+    from qgis.core import QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsGeometry, QgsLineString, QgsProject, QgsRectangle, QgsVectorLayer, QgsWkbTypes
     from qgis.gui import QgsMapCanvas
     from qgis.PyQt.QtCore import Qt
     HAS_QGIS = True
@@ -25,6 +33,8 @@ class MemorySettings:
     def set(self, key, value): self.values[key] = value
     def excluded_layer_ids(self): return self.excluded
     def reference_layer_ids(self): return self.references
+    def search_radius(self, canvas): return 0.5
+    def cluster_tolerance(self, canvas): return 0.01
     def set_excluded_layer_ids(self, ids): self.excluded = set(ids)
     def set_reference_layer_ids(self, ids): self.references = set(ids)
 
@@ -94,16 +104,20 @@ class QgisIntegrationTests(unittest.TestCase):
         return layer
 
     def geometry(self, layer):
-        return next(layer.getFeatures()).geometry()
+        return list(layer.getFeatures())[0].geometry()     # an open iterator locks a GeoPackage
 
-    def graph(self):
+    def vertices(self, layer):
+        geometry = self.geometry(layer)     # must outlive its vertex iterator
+        return list(geometry.vertices())
+
+    def graph(self, tolerance=0.01):
         from align_edge.graph_builder import FeatureCache, build_from_snapshot
         self.canvas.setLayers(self.layers)
         cache = FeatureCache(self.canvas, self.settings, lambda reason: None)
         self.caches.append(cache)
         self.assertTrue(cache.sync_layers())
         cache.read()
-        return build_from_snapshot(cache.snapshot(0.01))
+        return build_from_snapshot(cache.snapshot(tolerance))
 
     def plan(self, graph, source, target):
         src = next(e.id for e in graph.edges if any(k[0] == source.id() for k in e.owners))
@@ -128,16 +142,268 @@ class QgisIntegrationTests(unittest.TestCase):
         source.undoStack().undo()
         self.assertEqual(self.geometry(source).asWkt(), 'LineString (0 0, 5 1, 10 0)')
 
-    def test_endpoint_move_that_disconnects_another_edge_is_blocked(self):
+    def edge(self, graph, layer):
+        return next(e.id for e in graph.edges if any(k[0] == layer.id() for k in e.owners))
+
+    def test_edges_joined_to_a_moved_endpoint_stay_joined(self):
+        from align_edge.edge_writer import apply_changes, build_changes
+        source = self.layer('source', 'LINESTRING ZM(0 0 1 10,5 1 2 20,10 0 3 30)', 'LineStringZM')
+        target = self.layer('target', 'LINESTRING(0.005 0,5 2,10.005 0)')
+        incident = self.layer('incident', 'LINESTRING ZM(0 0 7 70,-5 0 8 80)', 'LineStringZM')
+        graph, ctx = self.graph()
+        plan = graph.plan_align(self.edge(graph, source), self.edge(graph, target))
+        self.assertTrue(plan.ok, plan.error)
+        apply_changes(build_changes(plan, graph, ctx), ctx)
+        moved = list(self.vertices(incident))
+        start = self.vertices(source)[0]
+        self.assertEqual((start.x(), start.y()), (0.005, 0))
+        self.assertEqual((moved[0].x(), moved[0].y(), moved[0].z(), moved[0].m()), (0.005, 0, 7, 70))
+        self.assertEqual((moved[1].x(), moved[1].y(), moved[1].z(), moved[1].m()), (-5, 0, 8, 80))
+        self.assertEqual(self.geometry(target).asWkt(3), 'LineString (0.005 0, 5 2, 10.005 0)')
+
+    def test_endpoint_move_that_would_leave_a_reference_behind_is_blocked(self):
         source = self.layer('source', 'LINESTRING(0 0,5 1,10 0)')
         target = self.layer('target', 'LINESTRING(0.005 0,5 2,10.005 0)')
-        self.layer('incident', 'LINESTRING(0 0,-5 0)')
+        incident = self.layer('incident', 'LINESTRING(0 0,-5 0)', editable=False)
+        self.settings.references.add(incident.id())
         graph, ctx = self.graph()
-        src = next(e.id for e in graph.edges if any(k[0] == source.id() for k in e.owners))
-        tgt = next(e.id for e in graph.edges if any(k[0] == target.id() for k in e.owners))
-        plan = graph.plan_align(src, tgt)
+        plan = graph.plan_align(self.edge(graph, source), self.edge(graph, target))
         self.assertFalse(plan.ok)
         self.assertIn('disconnect', plan.error)
+
+    def test_transform_noise_at_a_joined_reference_does_not_block(self):
+        source = self.layer('source', 'LINESTRING(0 0,5 1,10 0)')
+        target = self.layer('target', 'LINESTRING(0.0000000001 0,5 2,10 0)')
+        incident = self.layer('incident', 'LINESTRING(0 0,-5 0)', editable=False)
+        self.settings.references.add(incident.id())
+        graph, ctx = self.graph()
+        plan = graph.plan_align(self.edge(graph, source), self.edge(graph, target))
+        self.assertTrue(plan.ok, plan.error)
+        self.assertEqual(plan.moved, {})
+
+    def test_vertices_away_from_the_edge_are_never_thinned(self):
+        """A wide cluster tolerance must not drop vertices of the rest of the feature."""
+        from align_edge.edge_writer import build_changes
+        source = self.layer('source', 'POLYGON((0 0,10 0,10 10,9.7 10.1,9.4 10,5 10,0 10,0 0.4,0 0))', 'Polygon')
+        self.layer('target', 'LINESTRING(0 0,5 2,10 0)')
+        graph, ctx = self.graph(0.5)
+        src = next(e for e in graph.edges if any(k[0] == source.id() for k in e.owners)
+                   and {graph.point(e.start), graph.point(e.end)} == {(0, 0), (10, 0)} and len(e.pids) == 2)
+        tgt = graph.targets(src.id)[0][0]
+        plan = graph.plan_align(src.id, tgt)
+        self.assertTrue(plan.ok, plan.error)
+        new = build_changes(plan, graph, ctx)[source.id()][0][1]
+        xy = {(v.x(), v.y()) for v in new.vertices()}
+        self.assertTrue({(10, 10), (9.7, 10.1), (9.4, 10), (5, 10), (0, 10), (5, 2)} <= xy, xy)
+
+    def test_vertical_segments_away_from_the_edge_are_kept(self):
+        from align_edge.edge_writer import build_changes
+        source = self.layer('source', 'LINESTRING Z(-5 0 0,-5 0 9,0 0 9,5 1 9,10 0 9)', 'LineStringZ')
+        self.layer('target', 'LINESTRING(0 0,5 2,10 0)')
+        graph, ctx = self.graph()
+        src = next(e.id for e in graph.edges if (5.0, 1.0) in graph.edge_coords(e.id))
+        plan = graph.plan_align(src, graph.targets(src)[0][0])
+        self.assertTrue(plan.ok, plan.error)
+        new = build_changes(plan, graph, ctx)[source.id()][0][1]
+        self.assertEqual([(v.x(), v.y(), v.z()) for v in new.vertices()][:3], [(-5, 0, 0), (-5, 0, 9), (0, 0, 9)])
+
+    def test_edge_running_out_of_the_loaded_area_is_blocked(self):
+        """A neighbour sharing the off-screen part isn't loaded and would be left behind."""
+        source = self.layer('long', 'POLYGON((0 0,0 200,-50 200,-50 0,0 0))', 'Polygon')
+        self.layer('neighbour', 'POLYGON((0 100,0 150,20 150,20 100,0 100))', 'Polygon')
+        self.layer('target', 'LINESTRING(0 0,1 90,0 200)')
+        graph, ctx = self.graph()
+        src = graph.hit_test(0, 20, 0.1)[0]
+        tgt = graph.targets(src)[0][0]
+        plan = graph.plan_align(src, tgt)
+        self.assertFalse(plan.ok)
+        self.assertIn('zoom out', plan.error)
+        self.canvas.setExtent(QgsRectangle(-300, -100, 300, 300))
+        graph, ctx = self.graph()
+        src = graph.hit_test(0, 20, 0.1)[0]
+        self.assertEqual(graph.targets(src), [])            # the neighbour's corner is now a node
+
+    def test_ring_keeps_its_starting_vertex(self):
+        from align_edge.edge_writer import build_changes
+        for start in ((0, 0), (10, 0), (10, 10), (0, 10)):
+            with self.subTest(start=start):
+                ring = [(0, 0), (10, 0), (10, 10), (0, 10)]
+                k = ring.index(start)
+                ring = ring[k:] + ring[:k + 1]
+                source = self.layer('source', 'POLYGON((%s))' % ','.join('%d %d' % p for p in ring), 'Polygon')
+                target = self.layer('target', 'LINESTRING(10 0,11 5,10 10)')
+                graph, ctx = self.graph()
+                src = graph.hit_test(10, 5, 0.1)[0]
+                plan = graph.plan_align(src, graph.targets(src)[0][0])
+                new = build_changes(plan, graph, ctx)[source.id()][0][1]
+                first = list(new.vertices())[0]
+                self.assertEqual((first.x(), first.y()), start)
+                self.assertAlmostEqual(new.area(), 105)
+                self.caches.pop().clear()
+                self.canvas.setLayers([])
+                for layer in (source, target):
+                    self.layers.remove(layer)
+                    self.project.removeMapLayer(layer.id())
+
+    def test_straight_geometry_in_curve_layers_is_supported(self):
+        from align_edge.edge_writer import apply_changes, build_changes
+        from qgis.core import QgsVectorFileWriter
+        for kind, wkt in (('CompoundCurve', 'COMPOUNDCURVE((0 0,5 1,10 0))'),
+                          ('MultiCurve', 'MULTICURVE(COMPOUNDCURVE((0 0,5 1,10 0)))'),
+                          ('MultiSurface', 'MULTISURFACE(CURVEPOLYGON(COMPOUNDCURVE((0 0,5 1,10 0,5 -9,0 0))))')):
+            with self.subTest(kind=kind):
+                memory = self.layer(kind, wkt, kind, editable=False)
+                path = str(Path(tempfile.mkdtemp()) / 'curves.gpkg')
+                options = QgsVectorFileWriter.SaveVectorOptions()
+                QgsVectorFileWriter.writeAsVectorFormatV3(memory, path, self.project.transformContext(), options)
+                self.layers.remove(memory)
+                self.project.removeMapLayer(memory.id())
+                source = QgsVectorLayer(path, kind, 'ogr')
+                self.project.addMapLayer(source)
+                self.layers.append(source)
+                source.startEditing()
+                target = self.layer('target', 'LINESTRING(0 0,5 2,10 0)')
+                graph, ctx = self.graph()
+                src = next(e.id for e in graph.edges if (5.0, 1.0) in graph.edge_coords(e.id))
+                plan = graph.plan_align(src, graph.targets(src)[0][0])
+                self.assertTrue(plan.ok, plan.error)
+                apply_changes(build_changes(plan, graph, ctx), ctx)
+                self.assertTrue(source.commitChanges(), source.commitErrors())
+                self.assertEqual(self.geometry(source).wkbType(), source.wkbType())
+                self.assertIn((5, 2), [(v.x(), v.y()) for v in self.vertices(source)])
+                self.caches.pop().clear()
+                self.canvas.setLayers([])
+                for layer in (source, target):
+                    self.layers.remove(layer)
+                    self.project.removeMapLayer(layer.id())
+
+    def test_layer_crs_change_drops_the_cached_coordinates(self):
+        source = self.layer('source', 'LINESTRING(0 0,5 1,10 0)')
+        self.layer('target', 'LINESTRING(0 0,5 2,10 0)')
+        self.graph()
+        cache = self.caches[-1]
+        source.setCrs(QgsCoordinateReferenceSystem('EPSG:26918'))
+        cache.sync_layers()
+        self.assertFalse(cache.layers[source.id()].identity)
+        self.assertTrue(cache.needs_read())
+
+    def test_reference_filter_change_is_reread(self):
+        source = self.layer('source', 'LINESTRING(0 0,5 1,10 0)')
+        path = str(Path(tempfile.mkdtemp()) / 'ref.gpkg')
+        from qgis.core import QgsVectorFileWriter
+        QgsVectorFileWriter.writeAsVectorFormatV3(source, path, self.project.transformContext(),
+                                                  QgsVectorFileWriter.SaveVectorOptions())
+        reference = QgsVectorLayer(path, 'reference', 'ogr')
+        self.project.addMapLayer(reference)
+        self.layers.append(reference)
+        self.settings.references.add(reference.id())
+        self.graph()
+        self.assertFalse(self.caches[-1].needs_read())
+        reference.setSubsetString('fid < 0')
+        self.assertTrue(self.caches[-1].needs_read())
+
+    def test_unreadable_coordinates_skip_the_feature_not_the_layer(self):
+        source = self.layer('source', 'LINESTRING(0 0,5 1,10 0)')
+        bad = QgsFeature()
+        bad.setGeometry(QgsGeometry(QgsLineString([1, float('nan')], [1, 2])))
+        source.addFeature(bad)
+        graph, ctx = self.graph()
+        self.assertEqual(len(graph.parts), 1)
+
+    def tool(self):
+        from unittest.mock import Mock
+        from align_edge.align_edge_tool import AlignEdgeTool
+        iface = Mock()
+        iface.mapCanvas.return_value = self.canvas
+        tool = AlignEdgeTool(iface, self.settings)
+        tool.overlay = Mock()
+        self.addCleanup(tool.deleteLater)
+        return tool
+
+    def hover(self, tool, x, y):
+        from qgis.core import QgsPointXY
+        from qgis.PyQt.QtCore import QPoint
+        tool.graph, tool.ctx = self.graph()
+        tool._stale = False
+        tool._last = (QgsPointXY(x, y), QPoint(1, 1))
+        tool._update_hover()
+        return tool.overlay.tip.show_at.call_args[0][0]
+
+    def test_hover_explains_conflicting_target_owners(self):
+        self.layer('a', 'POLYGON((0 0,10 0,10 -10,0 -10,0 0))', 'Polygon')
+        self.layer('d', 'LINESTRING(0 0,5 2,10 0)')
+        self.layer('b', 'LINESTRING(0 0,5 2.009,10 0)')
+        self.layer('c', 'LINESTRING(0 0,5 1.991,10 0)')
+        tip = self.hover(self.tool(), 5, 0)
+        self.assertNotIn('Error', tip)
+        self.assertIn('different coordinates', tip)
+
+    def test_hover_does_not_offer_what_a_click_would_refuse(self):
+        self.layer('source', 'LINESTRING(0 0,5 -1,10 0)')
+        target = self.layer('curve', 'CIRCULARSTRING(0 0,5 2,10 0)', 'CircularString', False)
+        self.settings.references.add(target.id())
+        tip = self.hover(self.tool(), 5, -1)
+        self.assertNotIn('Click to align', tip)
+        self.assertIn('curved', tip)
+
+    def test_dragging_is_not_a_click(self):
+        from unittest.mock import Mock
+        from qgis.PyQt.QtCore import QPoint
+        tool = self.tool()
+        tool._click = Mock()
+        tool._stale, tool.graph = False, object()
+
+        def event(x):
+            return SimpleNamespace(button=lambda: Qt.MouseButton.LeftButton, mapPoint=lambda: None,
+                                   pixelPoint=lambda: QPoint(x, 5))
+        tool.canvasPressEvent(event(5))
+        tool.canvasReleaseEvent(event(200))
+        self.assertFalse(tool._click.called)
+        tool.canvasPressEvent(event(5))
+        tool.canvasReleaseEvent(event(6))
+        self.assertTrue(tool._click.called)
+
+    def test_roles_of_unavailable_layers_survive_the_dialog(self):
+        from align_edge.settings_dialog import SettingsDialog
+        broken = QgsVectorLayer('/nowhere/survey.gpkg', 'survey', 'ogr')
+        self.project.addMapLayer(broken)
+        self.layers.append(broken)
+        self.settings.references.update({broken.id(), 'gone'})
+        dialog = SettingsDialog(self.settings)
+        dialog.accept()
+        self.assertEqual(self.settings.references, {broken.id()})
+        dialog.deleteLater()
+
+    def test_settings_survive_bad_values_and_tolerance_belongs_to_the_project(self):
+        from qgis.core import QgsSettings
+        from align_edge.settings import Settings, _DEFAULTS
+        s = Settings()
+        store = QgsSettings()
+        old = store.value('AlignEdge/line_width')
+        try:
+            store.setValue('AlignEdge/line_width', 'abc')
+            self.assertEqual(s.get('line_width'), _DEFAULTS['line_width'])
+            self.project.clear()
+            s.set('cluster_tolerance', 0.25)
+            self.assertEqual(s.get('cluster_tolerance'), 0.25)
+            self.project.clear()
+            self.assertEqual(s.get('cluster_tolerance'), 0.0)   # 0.25 ft must not become 0.25 degrees
+        finally:
+            store.remove('AlignEdge/cluster_tolerance')
+            store.remove('AlignEdge/line_width') if old is None else store.setValue('AlignEdge/line_width', old)
+
+    def test_zooming_past_a_scale_limit_does_not_switch_the_tool_off(self):
+        from align_edge.plugin import AlignEdgePlugin
+        layer = self.layer('source', 'LINESTRING(0 0,10 0)')
+        layer.setScaleBasedVisibility(True)
+        layer.setMinimumScale(1)
+        self.canvas.setLayers([layer])
+        plugin = AlignEdgePlugin(SimpleNamespace(mapCanvas=lambda: self.canvas))
+        plugin.settings = self.settings
+        state = []
+        plugin.action = SimpleNamespace(setEnabled=state.append)
+        plugin.update_enabled()
+        self.assertEqual(state, [True])
 
     def test_zm_is_interpolated_from_source_not_2d_or_target_elevations(self):
         from align_edge.edge_writer import build_changes
@@ -238,7 +504,7 @@ class QgisIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(self.geometry(a).intersection(self.geometry(b)).area(), 0)
         self.assertAlmostEqual(self.geometry(a).area() + self.geometry(b).area(), 200)
         for layer in (a, b):
-            self.assertIn((9, 5), [(p.x(), p.y()) for p in self.geometry(layer).vertices()])
+            self.assertIn((9, 5), [(p.x(), p.y()) for p in self.vertices(layer)])
 
     def test_excluded_reference_is_ignored_and_reference_only_does_not_enable_tool(self):
         from align_edge.graph_builder import participating_layers

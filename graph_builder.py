@@ -20,6 +20,7 @@ Align Edge out of that contention.
 
 from qgis.core import (
     QgsCoordinateTransform,
+    QgsCsException,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
@@ -71,7 +72,7 @@ def finite(v):
     return v is not None and math.isfinite(v)
 
 
-def participating_layers(canvas, settings):
+def participating_layers(canvas, settings, any_scale=False):
     excluded = settings.excluded_layer_ids()
     references = settings.reference_layer_ids()
     out = []
@@ -82,7 +83,7 @@ def participating_layers(canvas, settings):
             continue
         if lyr.id() in excluded:
             continue
-        if lyr.hasScaleBasedVisibility() and not lyr.isInScaleRange(canvas.scale()):
+        if not any_scale and lyr.hasScaleBasedVisibility() and not lyr.isInScaleRange(canvas.scale()):
             continue
         out.append(lyr)
     return out
@@ -125,15 +126,24 @@ class _LayerCache(object):
         self.dirty = True           # must (re)read before use
 
     def make_entry(self, fid, geometry, feature, version):
+        """None for a feature that has no usable geometry in the map CRS."""
         if geometry is None or geometry.isNull() or geometry.isEmpty():
             return None
+        try:
+            return self._entry(fid, geometry, feature, version)
+        except (QgsCsException, ValueError) as err:
+            diag.log_once(("geometry", self.lid, fid), "cache: feature {} of {} skipped: {}".format(
+                fid, self.layer.name(), err))
+            return None
+
+    def _entry(self, fid, geometry, feature, version):
         e = _Entry()
         e.feature = feature
         e.geometry = QgsGeometry(geometry)
         e.version = version
         g = geometry
-        curved = QgsWkbTypes.isCurvedType(g.wkbType())
-        if curved:
+        curved = g.constGet().hasCurvedSegments()
+        if QgsWkbTypes.isCurvedType(g.wkbType()):       # exact when it has no arcs
             g = QgsGeometry(g.constGet().segmentize())
         parts = []
         map_parts = []
@@ -154,6 +164,8 @@ class _LayerCache(object):
                         q = self.xf.transform(QgsPointXY(x, y))
                         coords.append((q.x(), q.y()))
                 for x, y in coords:
+                    if not (math.isfinite(x) and math.isfinite(y)):
+                        raise ValueError("coordinate is not a number")
                     if x < minx:
                         minx = x
                     if x > maxx:
@@ -199,7 +211,7 @@ class FeatureCache(object):
             self._dest = dest
         want = {layer.id(): layer for layer in participating_layers(self.canvas, self.settings)}
         for lid in list(self.layers):
-            if lid not in want:
+            if self.layers[lid].layer is not want.get(lid):     # gone, or reloaded under the same id
                 self._disconnect(self.layers.pop(lid))
         for lid, lyr in want.items():
             if lid not in self.layers:
@@ -223,6 +235,9 @@ class FeatureCache(object):
             (lyr.afterCommitChanges, lambda lc=lc: self._invalidate(lc, "commit")),
             (lyr.afterRollBack, lambda lc=lc: self._invalidate(lc, "rollback")),
             (lyr.editingStopped, lambda lc=lc: self._invalidate(lc, "editing stopped")),
+            (lyr.dataChanged, lambda lc=lc: self._invalidate(lc, "data changed")),
+            (lyr.subsetStringChanged, lambda lc=lc: self._invalidate(lc, "filter changed")),
+            (lyr.crsChanged, lambda lc=lc: self._drop(lc)),
         ]
         for sig, slot in lc.slots:
             sig.connect(slot)
@@ -292,6 +307,12 @@ class FeatureCache(object):
             self.log("cache: {} on {} -> reread".format(why, lc.layer.name()))
         lc.dirty = True
         self.on_change(why)
+
+    def _drop(self, lc):
+        """The cached map coordinates are wrong: start this layer again."""
+        self._disconnect(lc)
+        self.layers.pop(lc.lid, None)
+        self.on_change("layer CRS changed")
 
     @staticmethod
     def _edit_buffer_feature(lc, fid):
@@ -368,6 +389,7 @@ class FeatureCache(object):
         vx0, vy0, vx1, vy1 = view.xMinimum(), view.yMinimum(), view.xMaximum(), view.yMaximum()
         ctx = GraphContext(self._dest, self)
         snap = Snapshot(ctx, cluster_tol)
+        snap.extent = (vx0, vy0, vx1, vy1)
         max_v = self.settings.get("max_vertices")
         references = self.settings.reference_layer_ids()
         count = 0
@@ -441,11 +463,13 @@ class Snapshot(object):
         self.ctx = ctx
         self.cluster_tol = cluster_tol
         self.parts = []          # (key, coords, closed, locked)
+        self.extent = None       # every participating feature touching this is in parts
 
 
 def graph_for_snapshot(snap):
     """Unbuilt TopologyGraph loaded with the snapshot's parts."""
     graph = TopologyGraph(snap.cluster_tol)
+    graph.extent = snap.extent
     for key, coords, closed, locked in snap.parts:
         graph.add_part(key, coords, closed, locked)
     return graph

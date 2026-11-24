@@ -34,7 +34,8 @@ AREA_RATIO = 10.0
 
 
 class _Part(object):
-    __slots__ = ("key", "coords", "closed", "locked", "vpids", "entries")
+    __slots__ = ("key", "coords", "closed", "locked", "vpids", "entries",
+                 "merged")
 
     def __init__(self, key, coords, closed, locked):
         self.key = key
@@ -43,6 +44,11 @@ class _Part(object):
         self.locked = locked        # True -> may be a target but never edited
         self.vpids = []             # point id of each original vertex
         self.entries = []           # noded sequence: (pid, original_index or None)
+        self.merged = {}            # original index -> all original indexes clustered into it
+
+    def originals(self, index):
+        """Every original vertex behind one entry of the noded sequence."""
+        return self.merged.get(index, (index,))
 
 
 class Edge(object):
@@ -67,6 +73,7 @@ class AlignPlan(object):
         self.src = src
         self.tgt = tgt
         self.parts = {}            # part key -> list of emit items
+        self.moved = {}            # (part key, original index) -> node of a joined feature that moves too
         self.error = None
         self.max_shift = 0.0
         self.shift_pair = None     # ((x,y),(x,y)) realising max_shift
@@ -294,6 +301,7 @@ class TopologyGraph(object):
         self.parts = {}                     # key -> _Part
         self.edges = []                     # eid -> Edge
         self.nodes = set()                  # pids
+        self.extent = None                  # (x0, y0, x1, y1) inside which every feature is loaded
         self.seg_edge = {}                  # (a,b) -> eid
         self.node_edges = defaultdict(set)  # pid -> {eid}
         self._by_ends = defaultdict(list)   # frozenset({a,b}) -> [eid]
@@ -445,21 +453,26 @@ class TopologyGraph(object):
                 entries.append((p.vpids[-1], n - 1))
             idx += m
             out = []
+            p.merged = {}
             for e in entries:
                 ticks += 1
                 if ticks >= STEP:
                     ticks = 0
                     yield
                 if out and out[-1][0] == e[0]:
-                    if out[-1][1] is None and e[1] is not None:
+                    if out[-1][1] is None:
                         out[-1] = e
+                    elif e[1] is not None:
+                        p.merged[out[-1][1]] = p.originals(out[-1][1]) + (e[1],)
                     continue
                 out.append(e)
             if p.closed:
                 while len(out) > 1 and out[0][0] == out[-1][0]:
                     last = out.pop()
-                    if out[0][1] is None and last[1] is not None:
+                    if out[0][1] is None:
                         out[0] = last
+                    elif last[1] is not None:
+                        p.merged[out[0][1]] = p.originals(last[1]) + p.originals(out[0][1])
             p.entries = out
 
         # 5. planar graph segments
@@ -744,9 +757,19 @@ class TopologyGraph(object):
                 else:
                     plan.target_vertices[pid] = (key, index, xy)
 
-        # Move the selected edge's ends only when unchanged incident edges already meet the target.
+        # A neighbour sharing the part that is out of view isn't loaded and would be left behind.
+        if self.extent is not None:
+            x0, y0, x1, y1 = self.extent
+            if any(not (x0 <= x <= x1 and y0 <= y <= y1) for x, y in self.edge_coords(src_id)):
+                plan.error = "the edge runs outside the map view; zoom out until all of it is visible"
+                return plan
+
+        # Features joined to an end of the edge stay joined: their vertex moves with it,
+        # by no more than the cluster tolerance.
         for pid in (src.start, src.end):
             xy = plan.target_vertices[pid][2]
+            joined = {part.coords[i] for part in (self.parts[key] for key in src.owners)
+                      for p, i in part.entries if p == pid and i is not None}
             incident = {key for eid in self.node_edges.get(pid, ()) for key in self.edges[eid].owners}
             for key in incident:
                 part = self.parts[key]
@@ -756,9 +779,15 @@ class TopologyGraph(object):
                 line = part.coords + part.coords[:1] if part.closed else part.coords
                 for _p, index in entries:
                     old = part.coords[index] if index is not None else _dist_pt_line(self.points[pid], line)[1]
-                    if math.hypot(old[0] - xy[0], old[1] - xy[1]) > self.tol:
+                    if old == xy:
+                        continue
+                    shift = math.hypot(old[0] - xy[0], old[1] - xy[1])
+                    # a part that can't move may differ only by coordinate-transform noise
+                    if shift > (self.tol * 1e-3 if old in joined and part.locked else self.tol):
                         plan.error = "moving an endpoint would disconnect an unchanged edge; align the node first"
                         return plan
+                    if index is not None and old in joined and not part.locked:
+                        plan.moved.update(((key, o), pid) for o in part.originals(index))
         scoords = self.edge_coords(src_id)
         tcoords = [plan.target_vertices[p][2] for p in tpids]
         plan.max_shift, plan.shift_pair = hausdorff(scoords, tcoords)
@@ -807,12 +836,16 @@ class TopologyGraph(object):
             run_end = i0 + k
             run = [("pid", first)] + [("pid", q) for q in interior] + [("pid", E[run_end % L][0])]
             if p.closed:
-                rest = [("orig", E[i % L][1]) for i in range(run_end + 1, i0 + L)
-                        if E[i % L][1] is not None]
+                rest = [("orig", o) for i in range(run_end + 1, i0 + L)
+                        if E[i % L][1] is not None for o in p.originals(E[i % L][1])]
                 items = run + rest
+                # keep the ring's starting vertex (a parcel's point of beginning)
+                begin = next((i for i, it in enumerate(items)
+                              if it == ("orig", 0) or it == ("pid", p.vpids[0])), 0)
+                items = items[begin:] + items[:begin]
             else:
-                before = [("orig", o) for _, o in E[:i0] if o is not None]
-                after = [("orig", o) for _, o in E[run_end + 1:] if o is not None]
+                before = [("orig", o) for _, e in E[:i0] if e is not None for o in p.originals(e)]
+                after = [("orig", o) for _, e in E[run_end + 1:] if e is not None for o in p.originals(e)]
                 items = before + run + after
 
             # collapse / degeneracy check in map space
@@ -833,4 +866,8 @@ class TopologyGraph(object):
                 plan.parts[key] = items
                 return plan
             plan.parts[key] = items
+        for key in {k for k, _ in plan.moved}:
+            items = plan.parts.get(key) or [("orig", o) for o in range(len(self.parts[key].coords))]
+            plan.parts[key] = [("move", (v, plan.moved[(key, v)])) if kind == "orig" and (key, v) in plan.moved
+                               else (kind, v) for kind, v in items]
         return plan
