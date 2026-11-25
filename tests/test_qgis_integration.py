@@ -142,6 +142,51 @@ class QgisIntegrationTests(unittest.TestCase):
         source.undoStack().undo()
         self.assertEqual(self.geometry(source).asWkt(), 'LineString (0 0, 5 1, 10 0)')
 
+    def test_align_all_slivers_fixes_an_edge_within_tolerance_of_the_base_layer(self):
+        # A bend partway along, far enough apart not to cluster with the graph's own 0.01
+        # tolerance, keeps the two sides topologically distinct edges between the same
+        # (clustered) end nodes: a straight 2-point sliver with no bend has nothing left to
+        # distinguish it from its target once the ends cluster, and the graph merges the two
+        # into one shared edge outright - there would be nothing left for this to find.
+        from align_edge.sliver_align import find_candidates, apply_candidates
+        base = self.layer('base', 'LINESTRING(0 0,5 1,10 0)', editable=False)
+        self.settings.references.add(base.id())
+        edit = self.layer('edit', 'LINESTRING(0.005 0,5 1.05,10.005 0)')
+        graph, ctx = self.graph()
+        candidates, skipped = find_candidates(
+            graph, {base.id()}, tolerance=0.1, nearby_factor=2.0, label_of=lambda eid: str(eid))
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(skipped, [])
+        done, failed = apply_candidates(candidates, graph, ctx)
+        self.assertEqual(len(done), 1)
+        self.assertEqual(failed, [])
+        self.assertEqual(self.geometry(edit).asWkb(), self.geometry(base).asWkb())
+
+    def test_align_all_slivers_leaves_out_a_gap_wider_than_its_own_tolerance(self):
+        from align_edge.sliver_align import find_candidates
+        base = self.layer('base', 'LINESTRING(0 0,5 1,10 0)', editable=False)
+        self.settings.references.add(base.id())
+        edit = self.layer('edit', 'LINESTRING(0.005 0,5 1.05,10.005 0)')
+        graph, ctx = self.graph()
+        candidates, skipped = find_candidates(
+            graph, {base.id()}, tolerance=0.01, nearby_factor=2.0, label_of=lambda eid: str(eid))
+        self.assertEqual(candidates, [])  # the bend is 0.05 apart - over the stricter 0.01 limit here
+        self.assertEqual(skipped, [])
+        self.assertEqual(self.geometry(edit).asWkt(), 'LineString (0.005 0, 5 1.05, 10.005 0)')
+
+    def test_align_all_slivers_never_moves_the_base_layer_itself(self):
+        from align_edge.sliver_align import find_candidates
+        base = self.layer('base', 'LINESTRING(0 0,5 1,10 0)', editable=False)
+        self.settings.references.add(base.id())
+        edit = self.layer('edit', 'LINESTRING(0.005 0,5 1.05,10.005 0)')
+        graph, ctx = self.graph()
+        candidates, _skipped = find_candidates(
+            graph, {base.id()}, tolerance=0.1, nearby_factor=2.0, label_of=lambda eid: str(eid))
+        self.assertEqual(len(candidates), 1)
+        moved_owner_layers = {key[0] for key in graph.edges[candidates[0].src].owners}
+        self.assertEqual(moved_owner_layers, {edit.id()})
+        self.assertNotIn(base.id(), moved_owner_layers)
+
     def edge(self, graph, layer):
         return next(e.id for e in graph.edges if any(k[0] == layer.id() for k in e.owners))
 

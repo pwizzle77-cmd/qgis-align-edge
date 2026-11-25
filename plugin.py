@@ -42,11 +42,19 @@ class AlignEdgePlugin(object):
             "highlighted) to turn it off.")
         self.action.triggered.connect(self.activate_tool)
 
+        self.sliver_action = QAction(QIcon(), "Align All Slivers…", mw)
+        self.sliver_action.setObjectName("mActionAlignEdgeSlivers")
+        self.sliver_action.setToolTip(
+            "Align every edge within tolerance of a base layer you choose, all at once, "
+            "with a preview before anything is written.")
+        self.sliver_action.triggered.connect(self.show_sliver_dialog)
+
         self.settings_action = QAction(QIcon(), "Align Edge Settings…", mw)
         self.settings_action.setObjectName("mActionAlignEdgeSettings")
         self.settings_action.triggered.connect(self.show_settings)
 
         self.menu = QMenu(mw)
+        self.menu.addAction(self.sliver_action)
         self.menu.addAction(self.settings_action)
         self.button = QToolButton(mw)
         self.button.setDefaultAction(self.action)
@@ -60,6 +68,7 @@ class AlignEdgePlugin(object):
         self.toolbar.iconSizeChanged.connect(self.button.setIconSize)
 
         self.iface.addPluginToVectorMenu(MENU, self.action)
+        self.iface.addPluginToVectorMenu(MENU, self.sliver_action)
         self.iface.addPluginToVectorMenu(MENU, self.settings_action)
 
         self.tool = AlignEdgeTool(self.iface, self.settings)
@@ -77,7 +86,7 @@ class AlignEdgePlugin(object):
             "tab": "Edit", "group": "Tools", "modify_group": "Alignment",
             "description": "Hover an edge to preview it and its target; click to align. "
                            "Tab cycles targets. Esc cancels. Click Align Edge again to leave the tool.",
-            "menu_actions": [self.settings_action.objectName()],
+            "menu_actions": [self.sliver_action.objectName(), self.settings_action.objectName()],
         }
         mw.setProperty("keystone/tool_placements", placements)
 
@@ -99,6 +108,7 @@ class AlignEdgePlugin(object):
                 pass
         self._unwatch()
         self.iface.removePluginVectorMenu(MENU, self.action)
+        self.iface.removePluginVectorMenu(MENU, self.sliver_action)
         self.iface.removePluginVectorMenu(MENU, self.settings_action)
         self.toolbar.removeAction(self.toolbar_action)
         if self.tool is not None:
@@ -107,7 +117,7 @@ class AlignEdgePlugin(object):
             self.tool.deleteLater()
             self.tool = None
         self.button.deleteLater()
-        for action in (self.action, self.settings_action):
+        for action in (self.action, self.sliver_action, self.settings_action):
             action.setObjectName("")
             action.setEnabled(False)
             action.deleteLater()
@@ -148,6 +158,11 @@ class AlignEdgePlugin(object):
             if self.tool is not None:
                 self.tool.restyle()
             self.update_enabled()
+
+    def show_sliver_dialog(self):
+        from .sliver_dialog import SliverAlignDialog
+        dlg = SliverAlignDialog(self.iface, self.tool, self.settings, self.iface.mainWindow())
+        dlg.exec()
 
     # ------------------------------------------------------------ enabled state
     def _watch(self, *args):

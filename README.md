@@ -51,9 +51,27 @@ Then restart QGIS.
 5. Press **Tab** or **Shift+Tab** to cycle through other edges that share the same two end nodes. **Esc** clears the highlight and cancels any waiting click.
 6. To turn the tool off, click the **Align Edge** button again or press **Esc** when nothing is highlighted. You go back to the tool you were using before (Pan if there was none).
 
-An edge is offered when both of its end nodes are shared with another edge. The dropdown on the toolbar button opens **Align Edge Settings**.
+An edge is offered when both of its end nodes are shared with another edge. The dropdown on the toolbar button opens **Align Edge Settings** and **Align All Slivers**.
 
 If the map is still drawing, the cursor turns busy and the click waits. It runs when the map is idle, on the topology for the view you settled on.
+
+## Align All Slivers
+
+For cleaning up many small, hair's-width gaps at once instead of hovering each one: open the
+toolbar dropdown's **Align All Slivers…**. Click **Align Edge** first so there is a topology
+built for the area you want to clean up.
+
+1. Pick the **base layer** - the one treated as correct, that stays put.
+2. Set a **tolerance**, in map units (defaults to the cluster tolerance from Settings).
+3. **Scan**. Every edge on another layer within that tolerance of the base layer, at the same
+   two corners, is listed with its shift. Anything close enough but that the usual safety
+   checks would refuse (a curved or multiply-traversed feature, say) is listed too, not hidden.
+4. **Align All**. Each one is aligned exactly like a single click, one undo step per feature.
+   A fix that would touch something an earlier one in the same batch already changed is
+   skipped rather than written over; run it again afterwards to pick up anything left.
+
+A genuine overlap or a gap wider than the tolerance is left alone - this only closes gaps
+small enough to be the same line digitized twice, not ones that need a surveyor's judgment.
 
 ## Settings
 
