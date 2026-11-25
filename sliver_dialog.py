@@ -2,7 +2,7 @@
 """Align All Slivers: batch-align every edge within tolerance of a chosen
 base layer, previewed before anything is written."""
 
-from qgis.core import QgsProject
+from qgis.PyQt.QtCore import QCoreApplication
 from qgis.gui import QgsDoubleSpinBox
 from qgis.PyQt.QtWidgets import (
     QComboBox,
@@ -16,22 +16,19 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .graph_builder import participating_layers
-from .sliver_align import apply_candidates, find_candidates
+from .sliver_align import build_graph, find_candidates, run_batch
 
 
 class SliverAlignDialog(QDialog):
     """Pick a base layer and a tolerance, scan the current topology for
     every other edge within that tolerance of it, review the list, then
-    apply. Works on the topology already built for the current view -
-    activate Align Edge first (so it has something to pan/zoom over and
-    build) if nothing is found."""
+    Align All. Reads its own topology for the current view - it does not
+    need the Align Edge tool itself turned on."""
 
-    def __init__(self, iface, tool, settings, parent=None):
+    def __init__(self, iface, settings, parent=None):
         super().__init__(parent or iface.mainWindow())
         self.iface = iface
-        self.tool = tool
         self.settings = settings
-        self.candidates = []
         self.setWindowTitle("Align All Slivers")
         self.resize(480, 420)
         lay = QVBoxLayout(self)
@@ -88,33 +85,28 @@ class SliverAlignDialog(QDialog):
             if idx >= 0:
                 self.base.setCurrentIndex(idx)
 
-    def _scan(self):
-        self.candidates = []
-        self.list.clear()
-        self.apply_btn.setEnabled(False)
-        graph = self.tool.graph if self.tool is not None else None
-        ctx = self.tool.ctx if self.tool is not None else None
-        if graph is None or ctx is None:
-            self.status.setText(
-                "No topology is built yet. Click the Align Edge button to activate it over the "
-                "area you want to clean up, then Scan again.")
-            return
+    def _base_and_tolerance(self):
         base_id = self.base.currentData()
         if not base_id:
             self.status.setText("Pick a base layer first.")
+            return None, None
+        return base_id, self.tolerance.value()
+
+    def _scan(self):
+        self.list.clear()
+        self.apply_btn.setEnabled(False)
+        base_id, tolerance = self._base_and_tolerance()
+        if base_id is None:
             return
-        tolerance = self.tolerance.value()
         nearby = self.settings.get("max_shift_ratio")
-
-        def label_of(eid):
-            key = next(iter(graph.edges[eid].owners))
-            return ctx.label(key[:2])
-
-        candidates, skipped = find_candidates(graph, {base_id}, tolerance, nearby, label_of)
-        self.candidates = candidates
+        graph, ctx, reason = build_graph(self.iface.mapCanvas(), self.settings, tolerance)
+        if graph is None:
+            self.status.setText(reason)
+            return
+        candidates, skipped = find_candidates(graph, ctx, {base_id}, tolerance, nearby)
         for cand in candidates:
             self.list.addItem("{} - {:.6f} map units".format(cand.label, cand.shift))
-        for label, reason in skipped:
+        for _key, label, reason in skipped:
             self.list.addItem("(not aligned) {} - {}".format(label, reason))
         msg = "{} sliver(s) found within tolerance.".format(len(candidates))
         if skipped:
@@ -125,24 +117,33 @@ class SliverAlignDialog(QDialog):
         self.apply_btn.setEnabled(bool(candidates))
 
     def _apply(self):
-        graph = self.tool.graph if self.tool is not None else None
-        ctx = self.tool.ctx if self.tool is not None else None
-        if graph is None or ctx is None or not self.candidates:
+        base_id, tolerance = self._base_and_tolerance()
+        if base_id is None:
             return
+        nearby = self.settings.get("max_shift_ratio")
         self.apply_btn.setEnabled(False)
-        done, failed = apply_candidates(self.candidates, graph, ctx)
-        self.candidates = []
+        close_btn = self.bb.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn is not None:
+            close_btn.setEnabled(False)
         self.list.clear()
+
+        def on_pass(pass_no, found, done_so_far):
+            self.status.setText("Pass {}: {} left to align ({} done so far)...".format(
+                pass_no, found, done_so_far))
+            QCoreApplication.processEvents()
+
+        try:
+            done, failed = run_batch(self.iface.mapCanvas(), self.settings, {base_id}, tolerance, nearby,
+                                     on_pass=on_pass)
+        finally:
+            if close_btn is not None:
+                close_btn.setEnabled(True)
         for label in done:
             self.list.addItem("Aligned: {}".format(label))
         for label, reason in failed:
             self.list.addItem("Not aligned: {} - {}".format(label, reason))
         msg = "Aligned {} of {}.".format(len(done), len(done) + len(failed))
         if failed:
-            msg += (" The rest were skipped, usually because a fix just above it in this "
-                    "batch already changed something they share - Scan again to pick up "
-                    "what's left.")
+            msg += " The rest could not be aligned automatically - see the list."
         self.status.setText(msg)
-        if self.tool is not None:
-            self.tool.schedule_rebuild()
         self.iface.mapCanvas().refresh()

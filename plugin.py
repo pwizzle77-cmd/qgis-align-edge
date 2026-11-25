@@ -161,7 +161,7 @@ class AlignEdgePlugin(object):
 
     def show_sliver_dialog(self):
         from .sliver_dialog import SliverAlignDialog
-        dlg = SliverAlignDialog(self.iface, self.tool, self.settings, self.iface.mainWindow())
+        dlg = SliverAlignDialog(self.iface, self.settings, self.iface.mainWindow())
         dlg.exec()
 
     # ------------------------------------------------------------ enabled state

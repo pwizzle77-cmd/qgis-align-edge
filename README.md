@@ -58,8 +58,9 @@ If the map is still drawing, the cursor turns busy and the click waits. It runs 
 ## Align All Slivers
 
 For cleaning up many small, hair's-width gaps at once instead of hovering each one: open the
-toolbar dropdown's **Align All Slivers…**. Click **Align Edge** first so there is a topology
-built for the area you want to clean up.
+toolbar dropdown's **Align All Slivers…**. It reads its own topology for the current view, so
+Align Edge itself does not need to be turned on first - pan and zoom to the area to clean up,
+then open it.
 
 1. Pick the **base layer** - the one treated as correct, that stays put.
 2. Set a **tolerance**, in map units (defaults to the cluster tolerance from Settings).
@@ -67,8 +68,9 @@ built for the area you want to clean up.
    two corners, is listed with its shift. Anything close enough but that the usual safety
    checks would refuse (a curved or multiply-traversed feature, say) is listed too, not hidden.
 4. **Align All**. Each one is aligned exactly like a single click, one undo step per feature.
-   A fix that would touch something an earlier one in the same batch already changed is
-   skipped rather than written over; run it again afterwards to pick up anything left.
+   When fixing one changes a feature another fix in the same run also needs, it re-reads the
+   topology and carries on from there instead of giving up on the rest - a fix never gets
+   skipped just because an earlier one in the same run touched something it shares.
 
 A genuine overlap or a gap wider than the tolerance is left alone - this only closes gaps
 small enough to be the same line digitized twice, not ones that need a surveyor's judgment.
